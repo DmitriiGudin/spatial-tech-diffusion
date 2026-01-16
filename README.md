@@ -1,3 +1,8 @@
+# Prerequisites
+
+Python 3.12
+
+
 # Installation
 
 1. Download the file at https://bit.ly/trackingthesun2025 (IT IS BIG) and put it in data/raw/pv/

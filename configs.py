@@ -23,7 +23,8 @@ default = dict(
         S0=("const", 0, 0) # Old: S0=("nonneg", 0, 1000),
     ),
     fem_model_params=dict(
-        r=1,
+        r_0=1,
+        r_1=0,
         p=0.03,
         q_I=0.5,
         gamma_J=1,
@@ -66,8 +67,9 @@ CA = dict(
         h_km=12,
         simplify_km=36, 
     ),
-    fem_model_params=dict(
-        r=0.21682372494611601,
+    fem_model_params=dict( # TO EDIT
+        r_0=0.21682372494611601,
+        r_1=0,
         p=1.7966300331458806e-05,
         q_I=0.11642553092295363,
         gamma_J=0.00012305488346120747,
@@ -98,8 +100,9 @@ IL = dict(
         h_km=7,
         simplify_km=21, 
     ),
-    fem_model_params=dict(
-        r=0.21682372494611601,
+    fem_model_params=dict( # TO EDIT
+        r_0=0.21682372494611601,
+        r_1=0,
         p=1.7966300331458806e-05,
         q_I=0.11642553092295363,
         gamma_J=0.00012305488346120747,
@@ -123,8 +126,9 @@ NY = dict(
         h_km=6,
         simplify_km=18, 
     ),
-    fem_model_params=dict(
-        r=0.21682372494611601,
+    fem_model_params=dict( # TO EDIT
+        r_0=0.21682372494611601,
+        r_1=0,
         p=1.7966300331458806e-05,
         q_I=0.11642553092295363,
         gamma_J=0.00012305488346120747,
@@ -145,5 +149,36 @@ NY = dict(
         "Albany": [-73.7545, 42.6518],
         "Kiryas Joel": [-74.1679, 41.3420],
         "Syracuse": [-76.1474, 43.0495] 
+    },
+)
+
+
+FL = dict(
+    mesh_params=dict(
+        state_list=['FL'],
+        h_km=8,
+        simplify_km=24, 
+    ),
+    fem_model_params=dict( # TO EDIT
+        r_0=0.21682372494611601,
+        r_1=0,
+        p=1.7966300331458806e-05,
+        q_I=0.11642553092295363,
+        gamma_J=0.00012305488346120747,
+        k_J=8.576616014263596e-05,
+        D=0.03381577568515316,
+        S0=12.82367787707364,
+    ),
+    time_params=dict(
+        start_year=2006,
+        T_years=18,
+        t_min_year=2002,
+        t_max_year=2024,
+    ),
+    cities={
+        "Miami": [-80.1918, 25.7617],
+        "Tampa": [-82.4588, 27.9517],
+        "Orlando": [-81.3789, 28.5384],
+        "Jacksonville": [-81.6592, 30.3298]
     },
 )

@@ -32,7 +32,7 @@ logging.getLogger("skfem").setLevel(logging.ERROR)
 from contextlib import contextmanager
 
 from fem_utils import load_mesh_km_from_msh
-from density_utils import get_batch_nodal_density, lonlat_to_km
+from density_utils import get_batch_nodal_density, lonlat_to_km, _events_inside_mesh_mask, fetch_cpi_monthly_fred, choose_cpi_base
 
 @contextmanager
 def timed(label: str):
@@ -821,114 +821,6 @@ def plot_triangle_population_comparison(
         print("Ratio est/true:", float(pop_est_node.sum() / max(pop_true_tri.sum(), 1.0)))
 
 
-def _events_inside_mesh_mask(
-    mesh: MeshTri,
-    lon: np.ndarray,
-    lat: np.ndarray,
-    epsg_project: int,
-    chunk_size: int = 50_000,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Returns:
-      inside_mask: (K,) bool
-      tri_ids:     (K,) int64   (-1 outside)
-      year_int:    (K,) int32   calendar year extracted from dates elsewhere if you want
-    """
-    x_km, y_km = _project_lonlat_to_km(lon, lat, epsg_project=epsg_project)
-    finder = _safe_element_finder(mesh, chunk_size=chunk_size)
-    tri_ids = finder(x_km, y_km).astype(np.int64)
-    inside = tri_ids >= 0
-    return inside, tri_ids, x_km, y_km
-
-
-def fetch_cpi_monthly_fred(
-    start: str,
-    end: str,
-    *,
-    cache_csv: Optional[Path] = None,
-) -> pd.Series:
-    """
-    Fetch monthly CPI (CPIAUCSL) from FRED via pandas_datareader.
-
-    Returns a pandas Series indexed by month start timestamps (freq ~ MS).
-    If cache_csv is provided and exists, uses it unless it doesn't cover [start,end].
-    """
-    start_dt = pd.to_datetime(start).to_period("M").to_timestamp()
-    end_dt = pd.to_datetime(end).to_period("M").to_timestamp()
-
-    # Try cache first
-    if cache_csv is not None and cache_csv.exists():
-        try:
-            dfc = pd.read_csv(cache_csv, parse_dates=["date"])
-            dfc = dfc.dropna(subset=["date", "CPIAUCSL"]).copy()
-            dfc = dfc.sort_values("date")
-            s = pd.Series(dfc["CPIAUCSL"].to_numpy(float), index=dfc["date"])
-            s = s[~s.index.duplicated(keep="last")]
-            if (s.index.min() <= start_dt) and (s.index.max() >= end_dt):
-                return s.loc[start_dt:end_dt]
-        except Exception:
-            pass  # fall through to re-download
-
-    # Download from FRED
-    try:
-        import pandas_datareader.data as web  # type: ignore
-    except Exception as e:
-        raise ImportError(
-            "pandas_datareader is required for CPI download. "
-            "Install with: pip install pandas-datareader"
-        ) from e
-
-    df = web.DataReader("CPIAUCSL", "fred", start_dt, end_dt)
-    if df.empty:
-        raise RuntimeError("CPI download returned empty dataframe.")
-
-    s = df["CPIAUCSL"].copy()
-    # Normalize index to month-start timestamps
-    s.index = pd.to_datetime(s.index).to_period("M").to_timestamp()
-
-    if cache_csv is not None:
-        cache_csv.parent.mkdir(parents=True, exist_ok=True)
-        out = pd.DataFrame({"date": s.index, "CPIAUCSL": s.to_numpy(float)})
-        out.to_csv(cache_csv, index=False)
-
-    return s
-
-
-def choose_cpi_base(
-    cpi: pd.Series,
-    *,
-    base_year: int = 2026,
-    base_month: Optional[int] = None,
-) -> tuple[pd.Timestamp, float]:
-    """
-    Choose CPI base date/value.
-    Preference: latest month in base_year (optionally a specific base_month).
-    Fallback: latest available CPI month overall.
-    """
-    cpi = cpi.dropna().copy()
-    if cpi.empty:
-        raise ValueError("CPI series is empty after dropping NaNs.")
-
-    idx = pd.to_datetime(cpi.index).to_period("M").to_timestamp()
-    cpi.index = idx
-
-    if base_month is not None:
-        target = pd.Timestamp(year=base_year, month=int(base_month), day=1)
-        if target in cpi.index:
-            return target, float(cpi.loc[target])
-        # if not present, fall back (don’t silently interpolate)
-        print(f"[CPI] WARNING: CPI for {base_year:04d}-{base_month:02d} not available; falling back to latest.")
-
-    in_year = cpi[cpi.index.year == int(base_year)]
-    if not in_year.empty:
-        dt = in_year.index.max()
-        return dt, float(in_year.loc[dt])
-
-    dt = cpi.index.max()
-    print(f"[CPI] WARNING: no CPI data found for year {base_year}; using latest available {dt.strftime('%Y-%m')}.")
-    return dt, float(cpi.loc[dt])
-
-
 def plot_adoptions_vs_costs(
     events_df: pd.DataFrame,
     out_png: Path,
@@ -938,8 +830,8 @@ def plot_adoptions_vs_costs(
     price_col: str = "price",
     date_col: str = "date",
     missing_price_value: float = -1.0,
-    base_year: int = 2026,
-    base_month: Optional[int] = None,
+    base_year: int = 2025,
+    base_month: Optional[int] = 12,
     cpi_cache_csv: Optional[Path] = None,
 ) -> dict:
     """
@@ -1084,14 +976,13 @@ def plot_adoptions_vs_costs(
             base_month=int(base_month) if base_month is not None else None,
         )
     
-    
 def plot_mesh_costs(
     msh_path: Path,
     events_df: pd.DataFrame,
     out_png: Path,
     *,
     year: int,
-    h_km: float,                    # REQUIRED for circle radius, like other plots
+    h_km: float,
     epsg_project: int = 5070,
     price_col: str = "price",
     date_col: str = "date",
@@ -1099,19 +990,15 @@ def plot_mesh_costs(
     chunk_size: int = 50_000,
     # CPI adjustment (optional)
     cpi_adjust: bool = True,
-    base_year: int = 2026,
-    base_month: Optional[int] = None,
+    base_year: int = 2025,
+    base_month: Optional[int] = 12,
     cpi_cache_csv: Optional[Path] = None,
 ) -> dict:
     """
-    Node-biased plot: circles centered at nodes, colored by per-node median cost.
+    Node-biased plot: circles centered at nodes, colored by per-node (trimmed) median cost.
 
-    - Uses only strictly positive prices (finite and > 0, and != missing_price_value).
-    - Uses only events inside the mesh.
-    - Per-node median built by assigning each event price to the 3 triangle vertices.
-    - Nodes with no samples get the statewide median (median across all positive observations inside mesh).
-    - Colorbar is linear, vmin=0, vmax=max(node_median).
-    - If there are no positive price observations inside mesh for that year -> no plot; print warning.
+    IMPORTANT: This function now uses density_utils.get_batch_nodal_cost() so the plot
+    matches what the FEM/MLE code will use.
     """
     with timed("plot_mesh_costs"):
         import matplotlib.pyplot as plt
@@ -1119,160 +1006,51 @@ def plot_mesh_costs(
         from matplotlib.patches import Ellipse
         from matplotlib.collections import PatchCollection
 
+        from density_utils import get_batch_nodal_cost  # <- single source of truth
+
         mesh = load_mesh_km_from_msh(msh_path)
         N = mesh.p.shape[1]
-        tri = mesh.t  # (3, ntri)
 
-        df = events_df.copy()
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-        df = df.dropna(subset=[date_col, "longitude", "latitude"]).copy()
-        if df.empty:
-            raise ValueError("No valid events after parsing date/coords.")
-
-        # year filter
-        df = df[df[date_col].dt.year.astype(int) == int(year)].copy()
-        if df.empty:
-            print(f"[mesh_costs] WARNING: no events in year={year}. Skipping plot.")
-            return dict(year=int(year), made_plot=False, n_price_obs_inside=0)
-
-        # parse prices and enforce STRICT positivity
-        if price_col not in df.columns:
-            raise ValueError(f"Column '{price_col}' not found in events_df.")
-        prices_raw = pd.to_numeric(df[price_col], errors="coerce").to_numpy(float)
-
-        ok_price = (
-            np.isfinite(prices_raw) &
-            (prices_raw > 0.0) &
-            (prices_raw != float(missing_price_value))
+        # ------------------------------------------------------------------
+        # Get nodal costs from density_utils (single source of truth)
+        # ------------------------------------------------------------------
+        out = get_batch_nodal_cost(
+            mesh=mesh,
+            years=[float(year)],
+            events_df=events_df,
+            epsg_project=int(epsg_project),
+            price_col=str(price_col),
+            date_col=str(date_col),
+            missing_price_value=float(missing_price_value),
+            chunk_size=int(chunk_size),
+            cpi_adjust=bool(cpi_adjust),
+            base_year=int(base_year),
+            base_month=int(base_month) if base_month is not None else None,
+            cpi_cache_csv=cpi_cache_csv,
+            trim_q=0.20,  # drop bottom/top 20% within the year (global within mesh)
+            use_cache=True,
         )
-        df = df.loc[ok_price].copy()
-        if df.empty:
-            print(f"[mesh_costs] WARNING: no positive valid prices in year={year}. Skipping plot.")
-            return dict(year=int(year), made_plot=False, n_price_obs_inside=0)
 
-        # inside mesh
-        lon = df["longitude"].to_numpy(float)
-        lat = df["latitude"].to_numpy(float)
-        inside, tri_ids, _, _ = _events_inside_mesh_mask(mesh, lon, lat, epsg_project, chunk_size=chunk_size)
-        df = df.loc[inside].copy()
-        tri_ids = tri_ids[inside].astype(np.int64)
+        made = bool(out.get("made", True))  # you can standardize this in density_utils
+        if not made:
+            # density_utils should already have printed a reason
+            return dict(year=int(year), made_plot=False, **{k: out[k] for k in out.keys() if k != "cost_nodes"})
 
-        if df.empty or tri_ids.size == 0:
-            print(f"[mesh_costs] WARNING: no positive priced events inside mesh in year={year}. Skipping plot.")
-            return dict(year=int(year), made_plot=False, n_price_obs_inside=0)
+        cost_nodes = np.asarray(out["cost_nodes"], float)  # (1, N)
+        node_cost = cost_nodes[0, :].copy()
 
-        prices = pd.to_numeric(df[price_col], errors="coerce").to_numpy(float)
+        # density_utils should guarantee positivity; but keep paranoia
+        node_cost[~np.isfinite(node_cost)] = 0.0
+        node_cost = np.clip(node_cost, 0.0, None)
 
-        # Optional CPI adjustment PER EVENT (month-specific), then keep strictly positive again
-        if cpi_adjust:
-            m0 = df[date_col].min().to_period("M").to_timestamp()
-            m1 = df[date_col].max().to_period("M").to_timestamp()
-            months = pd.date_range(m0, m1, freq="MS")
-
-            cpi = fetch_cpi_monthly_fred(
-                months.min().strftime("%Y-%m-%d"),
-                months.max().strftime("%Y-%m-%d"),
-                cache_csv=cpi_cache_csv
-            )
-            cpi = cpi.reindex(pd.to_datetime(months).to_period("M").to_timestamp())
-            if cpi.isna().any():
-                cpi = cpi.ffill()
-
-            base_dt, cpi_base = choose_cpi_base(cpi, base_year=base_year, base_month=base_month)
-
-            ev_month = df[date_col].dt.to_period("M").dt.to_timestamp()
-            cpi_ev = cpi.reindex(ev_month).to_numpy(float)
-
-            scale = float(cpi_base) / np.maximum(cpi_ev, 1e-12)
-            prices = prices * scale
-
-            # enforce positivity post-transform (paranoia)
-            pos = np.isfinite(prices) & (prices > 0.0)
-            prices = prices[pos]
-            tri_ids = tri_ids[pos]
-            df = df.iloc[np.where(pos)[0]].copy()
-            
-        # ------------------------------------------------------------------
-        # Trim extreme prices within the year to suppress broken 1-2 sample nodes
-        # Drop bottom 20% and top 20% of (positive) prices for this year.
-        # ------------------------------------------------------------------
-        trim_q = 0.20
-        if prices.size >= 10:  # avoid doing something silly on tiny samples
-            lo = float(np.quantile(prices, trim_q))
-            hi = float(np.quantile(prices, 1.0 - trim_q))
-
-            # Guard against degenerate quantiles (all prices equal, etc.)
-            if np.isfinite(lo) and np.isfinite(hi) and (hi > lo):
-                keep = (prices >= lo) & (prices <= hi) & np.isfinite(prices) & (prices > 0.0)
-
-                n_before = int(prices.size)
-                prices = prices[keep]
-                tri_ids = tri_ids[keep]
-                df = df.iloc[np.where(keep)[0]].copy()
-
-                print(f"[mesh_costs] trimmed prices in year={year}: "
-                      f"kept {int(prices.size):,}/{n_before:,} "
-                      f"(lo=q{trim_q:.2f}={lo:.6g}, hi=q{1-trim_q:.2f}={hi:.6g})")
-            else:
-                print(f"[mesh_costs] WARNING: trimming skipped (degenerate quantiles) "
-                      f"lo={lo}, hi={hi}")
-        else:
-            print(f"[mesh_costs] WARNING: trimming skipped (too few prices: {int(prices.size)})")
-
-        if prices.size == 0:
-            print(f"[mesh_costs] WARNING: all prices removed by trimming in year={year}. Skipping plot.")
-            return dict(year=int(year), made_plot=False, n_price_obs_inside=0)
-
-        if prices.size == 0:
-            print(f"[mesh_costs] WARNING: no positive prices after adjustment in year={year}. Skipping plot.")
-            return dict(year=int(year), made_plot=False, n_price_obs_inside=0)
-
-        # statewide median (STRICTLY POSITIVE sample set by construction)
-        statewide_median = float(np.median(prices))
-        if not np.isfinite(statewide_median) or statewide_median <= 0.0:
-            print(f"[mesh_costs] WARNING: statewide median not positive ({statewide_median}). Skipping plot.")
-            return dict(year=int(year), made_plot=False, n_price_obs_inside=int(prices.size))
-
-        # ----- per-node medians via triangle->3 vertices replication -----
-        v0 = tri[0, tri_ids]
-        v1 = tri[1, tri_ids]
-        v2 = tri[2, tri_ids]
-
-        node_ids = np.concatenate([v0, v1, v2]).astype(np.int64)
-        samples = np.concatenate([prices, prices, prices]).astype(float)
-
-        # sort by node id, compute medians per group
-        order = np.argsort(node_ids)
-        node_ids_s = node_ids[order]
-        samples_s = samples[order]
-
-        node_median = np.full(N, statewide_median, dtype=float)
-        node_count = np.zeros(N, dtype=np.int64)
-
-        cuts = np.flatnonzero(np.diff(node_ids_s)) + 1
-        starts = np.concatenate([[0], cuts])
-        ends = np.concatenate([cuts, [node_ids_s.size]])
-
-        for s, e in zip(starts, ends):
-            nid = int(node_ids_s[s])
-            vals = samples_s[s:e]
-            # vals should all be positive, but enforce anyway
-            vals = vals[np.isfinite(vals) & (vals > 0.0)]
-            if vals.size:
-                node_median[nid] = float(np.median(vals))
-                node_count[nid] = int(vals.size)
-
-        # harden: ensure no non-positive node values leak through
-        bad = ~(np.isfinite(node_median) & (node_median > 0.0))
-        if np.any(bad):
-            node_median[bad] = statewide_median
-
-        vmax = float(np.nanmax(node_median))
+        vmax = float(np.nanmax(node_cost))
         if not np.isfinite(vmax) or vmax <= 0.0:
             print(f"[mesh_costs] WARNING: vmax not positive ({vmax}). Skipping plot.")
-            return dict(year=int(year), made_plot=False, n_price_obs_inside=int(prices.size))
+            return dict(year=int(year), made_plot=False, **{k: out[k] for k in out.keys() if k != "cost_nodes"})
 
-        # ----- build lon/lat circles like your other plots -----
+        # ------------------------------------------------------------------
+        # Build lon/lat circles like your other plots
+        # ------------------------------------------------------------------
         pts_xy_km = mesh.p.T
         inv = _get_inverse_projector(epsg_project)
         lon_nodes, lat_nodes = inv.transform(pts_xy_km[:, 0] * 1000.0, pts_xy_km[:, 1] * 1000.0)
@@ -1292,7 +1070,7 @@ def plot_mesh_costs(
         ]
 
         norm = Normalize(vmin=0.0, vmax=vmax)
-        vals_plot = np.clip(node_median, 0.0, vmax)
+        vals_plot = np.clip(node_cost, 0.0, vmax)
 
         pc = PatchCollection(patches, array=vals_plot, norm=norm, linewidths=0.0)
 
@@ -1308,48 +1086,45 @@ def plot_mesh_costs(
         title = f"Node median cost ({year})"
         if cpi_adjust:
             title += f" (CPI-adjusted to {base_year})"
+        title += " [trim q20/q80]"
         ax.set_title(title)
 
         cbar = fig.colorbar(pc, ax=ax, location="right", fraction=0.046, pad=0.02)
         cbar.set_label("Median cost (linear)")
 
-        ax.text(
-            0.01, 0.01,
-            f"Statewide median used for missing nodes: {statewide_median:.3g}\n"
-            f"Positive price obs inside mesh: {int(prices.size):,}",
-            transform=ax.transAxes, va="bottom"
-        )
+        def _scalar0(x, cast=float):
+            a = np.asarray(x)
+            return cast(a.reshape(-1)[0])
         
-        print("[mesh_costs] price stats (positive inside mesh):",
-              "min", float(np.min(prices)),
-              "p1", float(np.quantile(prices, 0.01)),
-              "p50", float(np.quantile(prices, 0.50)),
-              "p99", float(np.quantile(prices, 0.99)),
-              "max", float(np.max(prices)))
+        lines = []
         
-        print("[mesh_costs] node_median stats:",
-              "min", float(np.min(node_median)),
-              "p1", float(np.quantile(node_median, 0.01)),
-              "p50", float(np.quantile(node_median, 0.50)),
-              "p99", float(np.quantile(node_median, 0.99)),
-              "max", float(np.max(node_median)),
-              "n<=0", int(np.count_nonzero(node_median <= 0)))
+        if "statewide_median" in out:
+            lines.append(f"Statewide median (fallback): {_scalar0(out['statewide_median'], float):.3g}")
+        
+        if "n_events_inside_pos" in out:
+            lines.append(f"Positive price obs inside mesh: {_scalar0(out['n_events_inside_pos'], int):,}")
+        
+        if "n_events_used" in out:
+            lines.append(f"Events used after trim: {_scalar0(out['n_events_used'], int):,}")
+        
+        if "node_count" in out:
+            node_count0 = np.asarray(out["node_count"])[0, :]
+            lines.append(f"Nodes with samples: {int(np.count_nonzero(node_count0 > 0)):,}/{int(N):,}")
+
+        if lines:
+            ax.text(0.01, 0.01, "\n".join(lines), transform=ax.transAxes, va="bottom")
 
         fig.savefig(out_png, dpi=200)
         plt.close(fig)
         print(f"[mesh_costs] saved plot to {out_png}")
 
-        return dict(
-            year=int(year),
-            made_plot=True,
-            n_price_obs_inside=int(prices.size),
-            statewide_median=float(statewide_median),
-            vmax=float(vmax),
-            n_nodes_with_samples=int(np.count_nonzero(node_count > 0)),
-            cpi_adjust=bool(cpi_adjust),
-            base_year=int(base_year),
-            base_month=int(base_month) if base_month is not None else None,
-        )
+        # return everything density_utils computed + plot info
+        ret = dict(year=int(year), made_plot=True, vmax=float(vmax))
+        for k, v in out.items():
+            if k == "cost_nodes":
+                continue
+            ret[k] = v
+        return ret
 
 
 def plot_total_adoptions_bimodal_log_fit(
@@ -1762,7 +1537,7 @@ def main():
     events_ca_df = events_df.loc[events_df["state"] == "NY"].copy()
     
     # ---- Adoptions per month + cost (inflation-adjusted heuristic) ----
-    out_png1 = out_dir_fig / "ny_adoptions_vs_costs_cpi2026.png"
+    out_png1 = out_dir_fig / "ny_adoptions_vs_costs_cpi2025.png"
     plot_adoptions_vs_costs(
         events_df=events_ca_df,
         out_png=out_png1,
@@ -1770,8 +1545,8 @@ def main():
         end_date=None,
         price_col="price",
         missing_price_value=-1.0,
-        base_year=2026,
-        base_month=None,  # set e.g. 1 for Jan-2026 if you want to force it
+        base_year=2025,
+        base_month=12,
         cpi_cache_csv=out_dir_fig / "cpi_cache.csv",
     )
     
@@ -1785,7 +1560,8 @@ def main():
         year=2023,
         h_km=h_km,
         cpi_adjust=True,
-        base_year=2026,
+        base_year=2025,
+        base_month=12,
         cpi_cache_csv=out_dir_fig / "cpi_cache.csv",
     )
     

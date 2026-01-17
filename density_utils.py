@@ -14,9 +14,13 @@ Expected arrays inside .npz (either naming is accepted):
     - pop2020 or population_2020 : (N,)
 """
 
-from pathlib import Path
+from __future__ import annotations
+
 import numpy as np
-from typing import Sequence
+import pandas as pd
+
+from pathlib import Path
+from typing import Sequence, Optional
 from scipy.spatial import cKDTree
 from scipy.sparse import coo_matrix, csr_matrix
 from scipy.sparse.linalg import spsolve
@@ -61,6 +65,11 @@ _MESH_NODAL_GEOM_CACHE: dict[tuple[int, int], dict] = {}
 # value: dict with keys: rho_nodes, N_nodes
 _MESH_NODAL_YEAR_CACHE: dict[tuple[int, int, float], dict] = {}
 
+# Cache computed cost_nodes for (mesh, epsg_project, year, knobs...)
+# key = (id(mesh), epsg_project, year_float, trim_q, cpi_adjust, base_year, base_month, missing_price_value)
+# value: dict with keys: cost_nodes, node_count, statewide_median, n_events_inside_pos, n_events_used
+_MESH_COST_YEAR_CACHE: dict[tuple[int, int, float, float, bool, int, int, float], dict] = {}
+
 # -------------------------------------------------------------------
 # Clear caches when changing the procedure somewhere
 # -------------------------------------------------------------------
@@ -68,7 +77,7 @@ def clear_density_caches() -> None:
     _MESH_DENSITY_CACHE.clear()
     _MESH_NODAL_GEOM_CACHE.clear()
     _MESH_NODAL_YEAR_CACHE.clear()
-
+    _MESH_COST_YEAR_CACHE.clear()
 
 def _triangle_areas_km2(mesh) -> np.ndarray:
     """Areas for each triangle, mesh coords are km."""
@@ -197,13 +206,9 @@ def _build_mesh_based_density_cache(mesh, year: float, epsg_project: int) -> dic
     # Build geometric finder in EPSG:5070 km coords for queries
     elem_finder = mesh.element_finder()
 
-    return {
-        "rho_nodes": rho_nodes,
-        "elem_finder": elem_finder,
-        "tri_nodes": tri_nodes,
+    return {"rho_nodes": rho_nodes, "elem_finder": elem_finder,"tri_nodes": tri_nodes,
         "mesh_xy_km": pts_xy_km,   # (N,2)
-        "epsg_project": epsg_project,
-    }
+        "epsg_project": epsg_project}
 
 
 def _get_mesh_density_cache(mesh, year: float, epsg_project: int) -> dict:
@@ -213,13 +218,7 @@ def _get_mesh_density_cache(mesh, year: float, epsg_project: int) -> dict:
     return _MESH_DENSITY_CACHE[key]
 
 
-def _get_density_mesh_based(
-    lon: float,
-    lat: float,
-    year: float,
-    mesh,
-    epsg_project: int = 5070,
-) -> float:
+def _get_density_mesh_based(lon: float, lat: float, year: float, mesh, epsg_project: int = 5070) -> float:
     """
     Evaluate mesh-based density rho_h(lon,lat) by:
       - projecting lon/lat -> EPSG:5070 -> km
@@ -257,6 +256,156 @@ def _get_density_mesh_based(
     w1, w2, w3 = _barycentric_weights(x_km, y_km, x1, y1, x2, y2, x3, y3)
     dens = w1 * rho_nodes[v0] + w2 * rho_nodes[v1] + w3 * rho_nodes[v2]
     return float(max(dens, 0.0))
+
+# -------------------------------------------------------------------
+# Shared helpers
+# -------------------------------------------------------------------
+
+def _project_lonlat_to_km(lon: np.ndarray, lat: np.ndarray, *, epsg_project: int = 5070) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Project lon/lat (deg, EPSG:4326) -> (x_km, y_km) in EPSG:epsg_project.
+    """
+    if Transformer is None:
+        raise ImportError("pyproj is required for lon/lat projection. Install: pip install pyproj")
+
+    lon = np.asarray(lon, float)
+    lat = np.asarray(lat, float)
+    fwd = Transformer.from_crs("EPSG:4326", f"EPSG:{int(epsg_project)}", always_xy=True)
+    x_m, y_m = fwd.transform(lon, lat)
+    return np.asarray(x_m, float) / 1000.0, np.asarray(y_m, float) / 1000.0
+
+
+def _events_inside_mesh_mask(mesh, lon: np.ndarray, lat: np.ndarray, epsg_project: int, chunk_size: int = 50_000,) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Returns:
+      inside_mask: (K,) bool
+      tri_ids:     (K,) int64   (-1 outside)
+      x_km:        (K,) float
+      y_km:        (K,) float
+    """
+    x_km, y_km = _project_lonlat_to_km(lon, lat, epsg_project=int(epsg_project))
+
+    finder = mesh.element_finder()  # skfem finder
+
+    K = int(x_km.size)
+    tri_ids = np.full(K, -1, dtype=np.int64)  # default: outside
+
+    # No chunking: try vectorized, fall back to per-point if needed
+    if chunk_size is None or int(chunk_size) <= 0:
+        try:
+            tri_ids[:] = finder(x_km, y_km).astype(np.int64)
+        except ValueError:
+            # At least one point is outside -> skfem raises; do per-point queries
+            for j in range(K):
+                try:
+                    tri_ids[j] = int(finder(np.array([x_km[j]]), np.array([y_km[j]]))[0])
+                except ValueError:
+                    tri_ids[j] = -1
+
+        inside = tri_ids >= 0
+        return inside, tri_ids, x_km, y_km
+
+    # Chunking: vectorized per chunk, per-point fallback only for bad chunks
+    cs = int(chunk_size)
+    for i0 in range(0, K, cs):
+        i1 = min(i0 + cs, K)
+        xc = x_km[i0:i1]
+        yc = y_km[i0:i1]
+
+        try:
+            tri_ids[i0:i1] = finder(xc, yc).astype(np.int64)
+        except ValueError:
+            # Some point(s) in this chunk are outside -> per-point fallback for this chunk
+            out = np.full(i1 - i0, -1, dtype=np.int64)
+            for jj in range(i1 - i0):
+                try:
+                    out[jj] = int(finder(np.array([xc[jj]]), np.array([yc[jj]]))[0])
+                except ValueError:
+                    out[jj] = -1
+            tri_ids[i0:i1] = out
+
+    inside = tri_ids >= 0
+    return inside, tri_ids, x_km, y_km
+
+
+def fetch_cpi_monthly_fred(start: str, end: str, *, cache_csv: Optional[Path] = None,) -> "pd.Series":
+    """
+    Fetch monthly CPI (CPIAUCSL) from FRED via pandas_datareader.
+
+    Returns a pandas Series indexed by month-start timestamps.
+    If cache_csv is provided and exists, uses it unless it doesn't cover [start,end].
+    """
+    import pandas as pd  # local import keeps density_utils import-light
+
+    start_dt = pd.to_datetime(start).to_period("M").to_timestamp()
+    end_dt = pd.to_datetime(end).to_period("M").to_timestamp()
+
+    # cache
+    if cache_csv is not None and cache_csv.exists():
+        try:
+            dfc = pd.read_csv(cache_csv, parse_dates=["date"])
+            dfc = dfc.dropna(subset=["date", "CPIAUCSL"]).copy()
+            dfc = dfc.sort_values("date")
+            s = pd.Series(dfc["CPIAUCSL"].to_numpy(float), index=dfc["date"])
+            s = s[~s.index.duplicated(keep="last")]
+            if (s.index.min() <= start_dt) and (s.index.max() >= end_dt):
+                return s.loc[start_dt:end_dt]
+        except Exception:
+            pass
+
+    # download
+    try:
+        import pandas_datareader.data as web  # type: ignore
+    except Exception as e:
+        raise ImportError(
+            "pandas_datareader is required for CPI download. Install with: pip install pandas-datareader"
+        ) from e
+
+    df = web.DataReader("CPIAUCSL", "fred", start_dt, end_dt)
+    if df.empty:
+        raise RuntimeError("CPI download returned empty dataframe.")
+
+    s = df["CPIAUCSL"].copy()
+    s.index = pd.to_datetime(s.index).to_period("M").to_timestamp()
+
+    if cache_csv is not None:
+        cache_csv.parent.mkdir(parents=True, exist_ok=True)
+        out = pd.DataFrame({"date": s.index, "CPIAUCSL": s.to_numpy(float)})
+        out.to_csv(cache_csv, index=False)
+
+    return s
+
+
+def choose_cpi_base(cpi: "pd.Series", *, base_year: int = 2025, base_month: Optional[int] = 12) -> tuple["pd.Timestamp", float]:
+    """
+    Choose CPI base date/value.
+    Preference: latest month in base_year (or specific base_month if provided).
+    Fallback: latest available CPI month overall.
+    """
+    import pandas as pd  # local import keeps density_utils import-light
+
+    cpi = cpi.dropna().copy()
+    if cpi.empty:
+        raise ValueError("CPI series is empty after dropping NaNs.")
+
+    idx = pd.to_datetime(cpi.index).to_period("M").to_timestamp()
+    cpi.index = idx
+
+    if base_month is not None:
+        target = pd.Timestamp(year=int(base_year), month=int(base_month), day=1)
+        if target in cpi.index:
+            return target, float(cpi.loc[target])
+        print(f"[CPI] WARNING: CPI for {base_year:04d}-{base_month:02d} not available; falling back to latest.")
+
+    in_year = cpi[cpi.index.year == int(base_year)]
+    if not in_year.empty:
+        dt = in_year.index.max()
+        return dt, float(in_year.loc[dt])
+
+    dt = cpi.index.max()
+    print(f"[CPI] WARNING: no CPI data found for year {base_year}; using latest available {dt.strftime('%Y-%m')}.")
+    return dt, float(cpi.loc[dt])
+
 
 # -------------------------------------------------------------------
 # Paths / constants
@@ -328,9 +477,7 @@ def lonlat_to_km(lon: float, lat: float) -> np.ndarray:
 # Temporal extrapolation: exponential between 2010 and 2020
 # -------------------------------------------------------------------
 
-def _extrapolate_population_vector(p2010: np.ndarray,
-                                  p2020: np.ndarray,
-                                  year: float) -> np.ndarray:
+def _extrapolate_population_vector(p2010: np.ndarray, p2020: np.ndarray, year: float) -> np.ndarray:
     """
     Exponential interpolation/extrapolation:
 
@@ -421,14 +568,8 @@ def _build_mesh_nodal_geom_cache(mesh, epsg_project: int) -> dict:
     zip_tri_ids = finder(COORDS_KM[:, 0], COORDS_KM[:, 1]).astype(np.int64)  # -1 outside
     zip_inside_idx = np.where(zip_tri_ids >= 0)[0].astype(np.int64)
 
-    return {
-        "tri_nodes": tri_nodes,
-        "areas_tri": areas_tri,
-        "A_nodes": A_nodes,
-        "zip_tri_ids": zip_tri_ids,
-        "zip_inside_idx": zip_inside_idx,
-        "epsg_project": epsg_project,
-    }
+    return {"tri_nodes": tri_nodes, "areas_tri": areas_tri, "A_nodes": A_nodes,
+        "zip_tri_ids": zip_tri_ids, "zip_inside_idx": zip_inside_idx, "epsg_project": epsg_project}
 
 
 def _get_mesh_nodal_geom_cache(mesh, epsg_project: int) -> dict:
@@ -441,14 +582,7 @@ def _get_mesh_nodal_geom_cache(mesh, epsg_project: int) -> dict:
 # Batch density
 # -------------------------------------------------------------------
 
-def get_batch_nodal_density(
-    mesh,
-    years: Sequence[float],
-    *,
-    epsg_project: int = 5070,
-    return_masses: bool = True,
-    use_cache: bool = True,
-) -> dict:
+def get_batch_nodal_density(mesh, years: Sequence[float], *, epsg_project: int = 5070, return_masses: bool = True, use_cache: bool = True) -> dict:
     """
     Compute mass-lumped nodal density rho_i(year) on the mesh for a batch of years.
 
@@ -540,3 +674,297 @@ def get_batch_nodal_density(
         out["N_nodes"] = N_nodes_all
         out["A_nodes"] = A_nodes
     return out
+
+
+# -------------------------------------------------------------------
+# Batch cost
+# -------------------------------------------------------------------
+# - fetch_cpi_monthly_fred
+# - choose_cpi_base
+# - _MESH_COST_YEAR_CACHE  (dict-like)
+
+
+def get_batch_nodal_cost(mesh, years: Sequence[float], *, events_df: pd.DataFrame, epsg_project: int = 5070, price_col: str = "price", date_col: str = "date",
+    missing_price_value: float = -1.0, trim_q: float = 0.20, chunk_size: int = 50_000, cpi_adjust: bool = True, base_year: int = 2025,     
+    base_month: Optional[int] = 12, cpi_cache_csv: Optional[Path] = None, use_cache: bool = True, min_events_for_trim: int = 10) -> dict:
+    """
+    Compute per-node yearly cost proxy on the mesh for a batch of years.
+
+    For each year:
+      - filter events to that year
+      - keep only finite, strictly positive prices (!= missing_price_value)
+      - keep only events inside the mesh
+      - optional CPI adjust per-event by month to base (base_year/base_month)
+      - trim global tails: drop bottom trim_q and top trim_q across all remaining events
+      - assign each event price to the 3 vertices of its containing triangle
+      - per-node median of assigned samples
+      - nodes with no samples filled with statewide median (median of trimmed sample set)
+
+    Returns dict with:
+        years: (nyears,)
+        cost_nodes: (nyears, N)
+        node_count: (nyears, N)
+        statewide_median: (nyears,)
+        n_events_inside_pos: (nyears,)
+        n_events_used: (nyears,)
+    """
+    yrs = np.asarray(list(years), dtype=float)
+    if yrs.size == 0:
+        raise ValueError("years must be a non-empty sequence of floats.")
+    if events_df is None:
+        raise ValueError("events_df is required for get_batch_nodal_cost.")
+
+    epsg_project = int(epsg_project)
+    trim_q = float(trim_q)
+    if not (0.0 <= trim_q < 0.5):
+        raise ValueError(f"trim_q must be in [0, 0.5), got {trim_q}")
+
+    tri = mesh.t  # (3, ntri)
+    N = mesh.p.shape[1]
+
+    # ---- Prepare events once ----
+    df0 = events_df.copy()
+    df0[date_col] = pd.to_datetime(df0[date_col], errors="coerce")
+    df0 = df0.dropna(subset=[date_col, "longitude", "latitude"]).copy()
+    if df0.empty:
+        raise ValueError("No valid events after parsing date/coords in events_df.")
+    if price_col not in df0.columns:
+        raise ValueError(f"Column '{price_col}' not found in events_df.")
+
+    prices0 = pd.to_numeric(df0[price_col], errors="coerce").to_numpy(float)
+
+    # ---- CPI: fetch ONCE ----
+    cpi_all = None
+    cpi_base = None
+    base_dt = None
+
+    if cpi_adjust:
+        # overall event span
+        global_start = df0[date_col].min().to_period("M").to_timestamp()
+        global_end = df0[date_col].max().to_period("M").to_timestamp()
+
+        # ensure the base month is inside the CPI request window
+        if base_month is None:
+            raise ValueError("If cpi_adjust=True, base_month must not be None.")
+        base_target = pd.Timestamp(year=int(base_year), month=int(base_month), day=1)
+
+        cpi_start = global_start
+        cpi_end = max(global_end, base_target)
+
+        cpi_all = fetch_cpi_monthly_fred(cpi_start.strftime("%Y-%m-%d"), cpi_end.strftime("%Y-%m-%d"), cache_csv=cpi_cache_csv)
+
+        # normalize index and forward-fill any gaps
+        idx = pd.to_datetime(cpi_all.index).to_period("M").to_timestamp()
+        cpi_all.index = idx
+        cpi_all = cpi_all.sort_index().ffill()
+
+        base_dt, cpi_base = choose_cpi_base(cpi_all, base_year=int(base_year), base_month=int(base_month))
+
+    # ---- Outputs ----
+    cost_nodes_all = np.zeros((yrs.size, N), dtype=float)
+    node_count_all = np.zeros((yrs.size, N), dtype=np.int64)
+    statewide_median_all = np.zeros(yrs.size, dtype=float)
+    n_inside_pos_all = np.zeros(yrs.size, dtype=np.int64)
+    n_used_all = np.zeros(yrs.size, dtype=np.int64)
+
+    # Precompute event years for fast filtering
+    ev_years = df0[date_col].dt.year.astype(int).to_numpy(np.int64)
+
+    for k, year in enumerate(yrs):
+        year_f = float(year)
+
+        # ---- Year-level cache ----
+        if use_cache:
+            key = (id(mesh), int(epsg_project), float(year_f), float(trim_q), bool(cpi_adjust),
+                int(base_year), int(base_month) if base_month is not None else -1, float(missing_price_value))
+            hit = _MESH_COST_YEAR_CACHE.get(key)
+            if hit is not None:
+                cost_nodes_all[k, :] = hit["cost_nodes"]
+                node_count_all[k, :] = hit["node_count"]
+                statewide_median_all[k] = hit["statewide_median"]
+                n_inside_pos_all[k] = hit["n_events_inside_pos"]
+                n_used_all[k] = hit["n_events_used"]
+                continue
+
+        # ---- Filter to year ----
+        mask_year = (ev_years == int(year_f))
+        if not np.any(mask_year):
+            cost_nodes = np.zeros(N, dtype=float)
+            node_count = np.zeros(N, dtype=np.int64)
+            statewide_median = 0.0
+
+            cost_nodes_all[k, :] = cost_nodes
+            node_count_all[k, :] = node_count
+            statewide_median_all[k] = statewide_median
+            n_inside_pos_all[k] = 0
+            n_used_all[k] = 0
+
+            if use_cache:
+                _MESH_COST_YEAR_CACHE[key] = dict(cost_nodes=cost_nodes, node_count=node_count, statewide_median=statewide_median, n_events_inside_pos=0, n_events_used=0)
+            continue
+
+        dfy = df0.loc[mask_year].copy()
+        py = prices0[mask_year].astype(float)
+
+        # ---- Strict positive + finite ----
+        ok_price = np.isfinite(py) & (py > 0.0) & (py != float(missing_price_value))
+        dfy = dfy.loc[ok_price].copy()
+        py = py[ok_price]
+        if py.size == 0:
+            cost_nodes = np.zeros(N, dtype=float)
+            node_count = np.zeros(N, dtype=np.int64)
+            statewide_median = 0.0
+
+            cost_nodes_all[k, :] = cost_nodes
+            node_count_all[k, :] = node_count
+            statewide_median_all[k] = statewide_median
+            n_inside_pos_all[k] = 0
+            n_used_all[k] = 0
+
+            if use_cache:
+                _MESH_COST_YEAR_CACHE[key] = dict(cost_nodes=cost_nodes, node_count=node_count, statewide_median=statewide_median, n_events_inside_pos=0, n_events_used=0)
+            continue
+
+        # ---- Inside mesh ----
+        lon = dfy["longitude"].to_numpy(float)
+        lat = dfy["latitude"].to_numpy(float)
+
+        inside, tri_ids, _, _ = _events_inside_mesh_mask(
+            mesh, lon, lat, epsg_project, chunk_size=chunk_size
+        )
+        dfy = dfy.loc[inside].copy()
+        py = py[inside]
+        tri_ids = tri_ids[inside].astype(np.int64)
+
+        n_inside_pos = int(py.size)
+        if py.size == 0:
+            cost_nodes = np.zeros(N, dtype=float)
+            node_count = np.zeros(N, dtype=np.int64)
+            statewide_median = 0.0
+
+            cost_nodes_all[k, :] = cost_nodes
+            node_count_all[k, :] = node_count
+            statewide_median_all[k] = statewide_median
+            n_inside_pos_all[k] = 0
+            n_used_all[k] = 0
+
+            if use_cache:
+                _MESH_COST_YEAR_CACHE[key] = dict(cost_nodes=cost_nodes, node_count=node_count, statewide_median=statewide_median, n_events_inside_pos=0, n_events_used=0)
+            continue
+
+        # ---- CPI adjust per event (month-specific), using CPI fetched once ----
+        if cpi_adjust:
+            ev_month = dfy[date_col].dt.to_period("M").dt.to_timestamp()
+            cpi_ev = cpi_all.reindex(ev_month).to_numpy(float)
+
+            scale = float(cpi_base) / np.maximum(cpi_ev, 1e-12)
+            py = py * scale
+
+            pos = np.isfinite(py) & (py > 0.0)
+            dfy = dfy.iloc[np.where(pos)[0]].copy()
+            tri_ids = tri_ids[pos]
+            py = py[pos]
+
+            if py.size == 0:
+                cost_nodes = np.zeros(N, dtype=float)
+                node_count = np.zeros(N, dtype=np.int64)
+                statewide_median = 0.0
+
+                cost_nodes_all[k, :] = cost_nodes
+                node_count_all[k, :] = node_count
+                statewide_median_all[k] = statewide_median
+                n_inside_pos_all[k] = n_inside_pos
+                n_used_all[k] = 0
+
+                if use_cache:
+                    _MESH_COST_YEAR_CACHE[key] = dict(
+                        cost_nodes=cost_nodes,
+                        node_count=node_count,
+                        statewide_median=statewide_median,
+                        n_events_inside_pos=n_inside_pos,
+                        n_events_used=0,
+                    )
+                continue
+
+        # ---- Trim tails within year ----
+        if (trim_q > 0.0) and (py.size >= int(min_events_for_trim)):
+            lo = float(np.quantile(py, trim_q))
+            hi = float(np.quantile(py, 1.0 - trim_q))
+            if np.isfinite(lo) and np.isfinite(hi) and (hi > lo):
+                keep = (py >= lo) & (py <= hi)
+                tri_ids = tri_ids[keep]
+                py = py[keep]
+                dfy = dfy.iloc[np.where(keep)[0]].copy()
+
+        n_used = int(py.size)
+        if py.size == 0:
+            cost_nodes = np.zeros(N, dtype=float)
+            node_count = np.zeros(N, dtype=np.int64)
+            statewide_median = 0.0
+
+            cost_nodes_all[k, :] = cost_nodes
+            node_count_all[k, :] = node_count
+            statewide_median_all[k] = statewide_median
+            n_inside_pos_all[k] = n_inside_pos
+            n_used_all[k] = 0
+
+            if use_cache:
+                _MESH_COST_YEAR_CACHE[key] = dict(cost_nodes=cost_nodes, node_count=node_count, statewide_median=statewide_median,
+                    n_events_inside_pos=n_inside_pos, n_events_used=0)
+            continue
+
+        statewide_median = float(np.median(py))
+        if (not np.isfinite(statewide_median)) or (statewide_median <= 0.0):
+            statewide_median = 0.0
+
+        # ---- Per-node medians via tri->3 vertices replication ----
+        v0 = tri[0, tri_ids]
+        v1 = tri[1, tri_ids]
+        v2 = tri[2, tri_ids]
+
+        node_ids = np.concatenate([v0, v1, v2]).astype(np.int64)
+        samples = np.concatenate([py, py, py]).astype(float)
+
+        order = np.argsort(node_ids)
+        node_ids_s = node_ids[order]
+        samples_s = samples[order]
+
+        cost_nodes = np.full(N, statewide_median, dtype=float)
+        node_count = np.zeros(N, dtype=np.int64)
+
+        cuts = np.flatnonzero(np.diff(node_ids_s)) + 1
+        starts = np.concatenate([[0], cuts])
+        ends = np.concatenate([cuts, [node_ids_s.size]])
+
+        for s, e in zip(starts, ends):
+            nid = int(node_ids_s[s])
+            vals = samples_s[s:e]
+            vals = vals[np.isfinite(vals) & (vals > 0.0)]
+            if vals.size:
+                cost_nodes[nid] = float(np.median(vals))
+                node_count[nid] = int(vals.size)
+
+        # Harden non-positive / non-finite
+        bad = ~(np.isfinite(cost_nodes) & (cost_nodes > 0.0))
+        if np.any(bad) and (statewide_median > 0.0):
+            cost_nodes[bad] = statewide_median
+        elif np.any(bad):
+            cost_nodes[bad] = 0.0
+
+        cost_nodes_all[k, :] = cost_nodes
+        node_count_all[k, :] = node_count
+        statewide_median_all[k] = statewide_median
+        n_inside_pos_all[k] = n_inside_pos
+        n_used_all[k] = n_used
+
+        if use_cache:
+            _MESH_COST_YEAR_CACHE[key] = dict(
+                cost_nodes=cost_nodes,
+                node_count=node_count,
+                statewide_median=statewide_median,
+                n_events_inside_pos=n_inside_pos,
+                n_events_used=n_used,
+            )
+
+    return dict(years=yrs, cost_nodes=cost_nodes_all, node_count=node_count_all, statewide_median=statewide_median_all, n_events_inside_pos=n_inside_pos_all,
+        n_events_used=n_used_all, trim_q=float(trim_q), cpi_adjust=bool(cpi_adjust), base_year=int(base_year), base_month=int(base_month) if base_month is not None else None)

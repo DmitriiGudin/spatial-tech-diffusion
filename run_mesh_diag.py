@@ -182,8 +182,8 @@ def main() -> int:
         print(f"[RUN] WARNING: no events found for states={states} in {csv_events.name}. Skipping adoption plots.")
         return 0
     
-    # Adoptions vs inflation-adjusted costs (monthly CPI, base 2026)
-    png_costs = out_dir_fig / f"{tag}_adoptions_vs_costs_cpi2026.png"
+    # Adoptions vs inflation-adjusted costs (monthly CPI, base 2025)
+    png_costs = out_dir_fig / f"{tag}_adoptions_vs_costs_cpi2025.png"
     plot_adoptions_vs_costs(
         events_df=events_sel,
         out_png=png_costs,
@@ -191,8 +191,8 @@ def main() -> int:
         end_date=None,
         price_col="price",
         missing_price_value=-1.0,
-        base_year=2026,
-        base_month=None,  # use latest available 2026 CPI, fallback if unavailable
+        base_year=2025,
+        base_month=12,  # use latest available 2025 CPI, fallback if unavailable
         cpi_cache_csv=out_dir_fig / "cpi_cache.csv",
     )
     
@@ -206,7 +206,8 @@ def main() -> int:
         year=int(args.year_pop),
         h_km=h_km,
         cpi_adjust=True,
-        base_year=2026,
+        base_year=2025,
+        base_month=12,
         cpi_cache_csv=Path("out/mesh_diag/figures") / "cpi_cache.csv",
     )
 

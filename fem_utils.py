@@ -46,7 +46,7 @@ from skfem import Basis, MeshTri, ElementTriP1, asm, BilinearForm
 from skfem.models.poisson import laplace
 logging.getLogger("skfem").setLevel(logging.ERROR)
 
-from density_utils import get_batch_nodal_density
+from density_utils import get_batch_nodal_density, get_batch_nodal_cost
 
 
 # =============================================================================
@@ -227,6 +227,7 @@ class FEMStageCache:
 
     rho_total: np.ndarray       # (nt,N) persons/km^2
     A_nodes: np.ndarray         # (N,) km^2 nodal control areas (mass-lumped)
+    cost_nodes: Optional[np.ndarray] = None   # (nt,N) or None
 
     def check_compatible(self, cfg: FEMConfig) -> None:
         if float(cfg.tau_years) != float(self.cfg.tau_years):
@@ -239,7 +240,7 @@ class FEMStageCache:
             raise ValueError("FEMStageCache incompatible: epsg_project differs.")
 
 
-def build_fem_stage_cache(msh_path: Path, cfg: FEMConfig, log: Optional[Callable[[str], None]] = None) -> FEMStageCache:
+def build_fem_stage_cache(msh_path: Path, cfg: FEMConfig, log: Optional[Callable[[str], None]] = None, *, cost_nodes: Optional[np.ndarray] = None,) -> FEMStageCache:
     mesh = load_mesh_km_from_msh(msh_path)
     basis = Basis(mesh, ElementTriP1())
     N = mesh.p.shape[1]
@@ -268,22 +269,15 @@ def build_fem_stage_cache(msh_path: Path, cfg: FEMConfig, log: Optional[Callable
     )
     rho_total = np.asarray(out["rho_nodes"], dtype=float)  # (nt,N)
     A_nodes = np.asarray(out["A_nodes"], dtype=float)      # (N,)
+    if cost_nodes is not None:
+        cost_nodes = np.asarray(cost_nodes, float)
+        if cost_nodes.shape != rho_total.shape:
+            raise ValueError(
+                f"cost_nodes shape {cost_nodes.shape} must match rho_total shape {rho_total.shape}."
+            )
 
-    return FEMStageCache(
-        msh_path=msh_path,
-        cfg=cfg,
-        mesh=mesh,
-        basis=basis,
-        N=N,
-        times=times,
-        M=M,
-        K=K,
-        lon_nodes=lon_nodes,
-        lat_nodes=lat_nodes,
-        xy_nodes_km=xy_nodes_km,
-        rho_total=rho_total,
-        A_nodes=A_nodes,
-    )
+    return FEMStageCache(msh_path=msh_path, cfg=cfg, mesh=mesh, basis=basis, N=N, times=times, M=M, K=K, lon_nodes=lon_nodes, 
+        lat_nodes=lat_nodes, xy_nodes_km=xy_nodes_km, rho_total=rho_total, A_nodes=A_nodes, cost_nodes=cost_nodes)
 
 
 # =============================================================================
@@ -321,13 +315,7 @@ def _is_constant_vector(x: np.ndarray, atol: float = 0.0) -> bool:
     return bool(np.all(np.abs(x - x.flat[0]) <= float(atol)))
 
 
-def solve_gsb_fem(
-    msh_path: Path,
-    funcs: GSBFunctions,
-    params: Dict[str, float],
-    cfg: FEMConfig,
-    cache: Optional[FEMStageCache] = None,
-    log: Optional[Callable[[str], None]] = None,
+def solve_gsb_fem(msh_path: Path, funcs: GSBFunctions, params: Dict[str, float], cfg: FEMConfig, cache: Optional[FEMStageCache] = None, log: Optional[Callable[[str], None]] = None,
 ) -> "GSBSolution":
     # --- use cache if provided, else build minimal local objects (slower) ---
     if cache is None:
@@ -350,6 +338,7 @@ def solve_gsb_fem(
 
         rho_total_pre = None
         A_nodes = M_L_vec.copy()   # (N,) km^2
+        cost_nodes_pre = None
     else:
         cache.check_compatible(cfg)
         mesh = cache.mesh
@@ -367,13 +356,15 @@ def solve_gsb_fem(
 
         xy_nodes_km = cache.xy_nodes_km
         rho_total_pre = cache.rho_total  # (nt,N)
+        cost_nodes_pre = getattr(cache, "cost_nodes", None)  # (nt,N) or None
 
     # --- params ---
-    r = float(params.get("r", 1.0))
+    r0 = float(params.get("r0", params.get("r", 1)))
+    r1 = float(params.get("r1", 0))
     p = float(params.get("p", 0.01))
     qI = float(params.get("q_I", 0.1))
-    kJ = float(params.get("k_J", 0.0))
-    D = float(params.get("D", 0.0))
+    kJ = float(params.get("k_J", 0))
+    D = float(params.get("D", 0))
 
     if funcs.mu_prime is None:
         funcs.mu_prime = ConstMuPrime(D=D)
@@ -392,6 +383,8 @@ def solve_gsb_fem(
 
     RHO_total_hist = [np.zeros(N, dtype=float)]
     RHO_adopt_hist = [np.zeros(N, dtype=float)]
+    R_nodes_hist = [np.full(N, r0, dtype=float)]
+    C_nodes_hist = [np.full(N, np.nan, dtype=float)]
 
     if log is not None:
         log(f"solve_gsb_fem: nodes={N}, steps={nsteps}, tau={tau} (cache={'yes' if cache is not None else 'no'})")
@@ -427,15 +420,28 @@ def solve_gsb_fem(
         if rho_total_pre is not None:
             rho_total = rho_total_pre[m].copy()
         else:
-            out = get_batch_nodal_density(
-                mesh, [cal_year],
-                epsg_project=cfg.epsg_project,
-                return_masses=True,
-                use_cache=True,
-            )
+            out = get_batch_nodal_density(mesh, [cal_year], epsg_project=cfg.epsg_project, return_masses=True, use_cache=True)
             rho_total = np.asarray(out["rho_nodes"][0], dtype=float)
 
-        rho_adopt = r * rho_total
+        # nodal cost at this snapshot (if available)
+        if cost_nodes_pre is not None:
+            c_nodes = np.asarray(cost_nodes_pre[m], float)
+        else:
+            c_nodes = None
+        
+        # r(x,t) = max(0, r0 - r1*c(x,t))
+        if c_nodes is None:
+            r_nodes = np.full_like(rho_total, r0, dtype=float)
+        else:
+            r_nodes = np.maximum(0.0, r0 - r1 * c_nodes)
+            
+        R_nodes_hist.append(r_nodes.copy())
+        if c_nodes is None:
+            C_nodes_hist.append(np.full(N, np.nan, dtype=float))
+        else:
+            C_nodes_hist.append(np.asarray(c_nodes, float).copy())
+        
+        rho_adopt = r_nodes * rho_total
 
         RHO_total_hist.append(rho_total.copy())
         RHO_adopt_hist.append(rho_adopt.copy())
@@ -509,19 +515,8 @@ def solve_gsb_fem(
     if J_clamp_steps > 0 and log is not None:
         log(f"[WARN] J clamped in {J_clamp_steps}/{nsteps} steps (total clamp events: {J_clamp_total}).")
 
-    return GSBSolution(
-        mesh=mesh,
-        basis=basis,
-        times=np.asarray(times, float),
-        YEAR0=float(cfg.YEAR0),
-        U=np.array(U_hist),
-        V=np.array(V_hist),
-        I=np.array(I_hist),
-        J=np.array(J_hist),
-        rho_total=np.array(RHO_total_hist),
-        rho_adopt=np.array(RHO_adopt_hist),
-        A_nodes=np.asarray(A_nodes, float),
-    )
+    return GSBSolution(mesh=mesh, basis=basis, times=np.asarray(times, float), YEAR0=float(cfg.YEAR0), U=np.array(U_hist), V=np.array(V_hist), I=np.array(I_hist), J=np.array(J_hist), 
+        rho_total=np.array(RHO_total_hist), rho_adopt=np.array(RHO_adopt_hist), A_nodes=np.asarray(A_nodes, float), r_nodes=np.array(R_nodes_hist), cost_nodes=np.array(C_nodes_hist))
 
 
 # =============================================================================
@@ -543,6 +538,8 @@ class GSBSolution:
     rho_total: np.ndarray
     rho_adopt: np.ndarray
     A_nodes: np.ndarray  # (N,) km^2, nodal control volumes
+    r_nodes: Optional[np.ndarray] = None      # (nt,N) or None
+    cost_nodes: Optional[np.ndarray] = None   # (nt,N) or None
 
     def __call__(self, x_km: float, y_km: float, t_years: float, abs_vals: bool = False) -> np.ndarray:
         x = float(x_km)
@@ -640,13 +637,7 @@ def safe_element_finder(mesh: MeshTri, chunk_size: int = 1000):
 # Intensity + nodal expected counts
 # =============================================================================
 
-def intensity_lambda_nodes(
-    sol: GSBSolution,
-    funcs: GSBFunctions,
-    params: Dict[str, float],
-    k: int,
-    lambda_floor: float = 1e-30,
-) -> np.ndarray:
+def intensity_lambda_nodes(sol: GSBSolution, funcs: GSBFunctions, params: Dict[str, float], k: int, lambda_floor: float = 1e-30) -> np.ndarray:
     """
     lambda_i(t_k) at nodes:
         lambda = rho_adopt * (p + q_I * F_I(I)) * (1 - u - v)
@@ -709,14 +700,8 @@ def _project_lonlat_to_km(lon: np.ndarray, lat: np.ndarray, epsg_project: int) -
     return np.asarray(x_m, float) / 1000.0, np.asarray(y_m, float) / 1000.0
 
 
-def bin_events_year_node(
-    mesh: MeshTri,
-    events_df: pd.DataFrame,
-    epsg_project: int = 5070,
-    t_min_year: int = 1998,
-    t_max_year: int = 2025,
-    chunk_size: int = 5000,
-) -> Tuple[np.ndarray, int, int, np.ndarray, Optional[pd.Timestamp], Optional[pd.Timestamp]]:
+def bin_events_year_node(mesh: MeshTri, events_df: pd.DataFrame, epsg_project: int = 5070, t_min_year: int = 1998, t_max_year: int = 2025,
+    chunk_size: int = 5000) -> Tuple[np.ndarray, int, int, np.ndarray, Optional[pd.Timestamp], Optional[pd.Timestamp]]:
     """
     Stream-bins events into node counts[nyears, N] by:
       - find containing triangle
@@ -801,14 +786,8 @@ def bin_events_year_node(
     return counts, K_total_window, K_inside, year_labels, min_ts, max_ts
 
 
-def bin_events_month_total_inside_mesh(
-    mesh: MeshTri,
-    events_df: pd.DataFrame,
-    epsg_project: int,
-    start_month: str,
-    end_month: str,
-    chunk_size: int = 5000,
-) -> Tuple[np.ndarray, List[pd.Timestamp], int, int]:
+def bin_events_month_total_inside_mesh(mesh: MeshTri, events_df: pd.DataFrame, epsg_project: int,
+    start_month: str, end_month: str, chunk_size: int = 5000) -> Tuple[np.ndarray, List[pd.Timestamp], int, int]:
     """
     Monthly total counts (inside mesh only). This remains a TOTAL, not nodal.
     """
@@ -864,13 +843,7 @@ def bin_events_month_total_inside_mesh(
 # Expected counts on NODES
 # =============================================================================
 
-def expected_counts_year_node(
-    sol: GSBSolution,
-    funcs: GSBFunctions,
-    params: Dict[str, float],
-    year_edges_years: np.ndarray,
-    lambda_floor: float = 1e-30,
-) -> np.ndarray:
+def expected_counts_year_node(sol: GSBSolution, funcs: GSBFunctions, params: Dict[str, float], year_edges_years: np.ndarray, lambda_floor: float = 1e-30) -> np.ndarray:
     """
     mu[y,i] = ∫_{year y} lambda_i(t) * A_i dt
     using trapezoid in time on solver snapshots.
@@ -922,13 +895,7 @@ def expected_counts_year_node(
     return np.maximum(mu, 1e-300)
 
 
-def expected_counts_month_total(
-    sol: GSBSolution,
-    funcs: GSBFunctions,
-    params: Dict[str, float],
-    month_edges_years: np.ndarray,
-    lambda_floor: float = 1e-30,
-) -> np.ndarray:
+def expected_counts_month_total(sol: GSBSolution, funcs: GSBFunctions, params: Dict[str, float], month_edges_years: np.ndarray, lambda_floor: float = 1e-30) -> np.ndarray:
     """
     Monthly total expected counts:
         mu_month[m] = ∫_{month m} Σ_i lambda_i(t) * A_i dt
@@ -1014,13 +981,7 @@ def bass_F(t: np.ndarray, p: float, q: float) -> np.ndarray:
     return (1.0 - e) / (1.0 + (q / p) * e)
 
 
-def fit_bass_to_monthly_counts(
-    y_month: np.ndarray,
-    month_edges_years_rel: np.ndarray,
-    p0: float = 0.01,
-    q0: float = 0.1,
-    M0: Optional[float] = None,
-) -> Tuple[float, float, float, np.ndarray]:
+def fit_bass_to_monthly_counts(y_month: np.ndarray, month_edges_years_rel: np.ndarray, p0: float = 0.01, q0: float = 0.1, M0: Optional[float] = None) -> Tuple[float, float, float, np.ndarray]:
     y = np.asarray(y_month, float)
     y = np.maximum(y, 0.0)
 
@@ -1134,8 +1095,7 @@ def _plot_data_vs_mu_year_nodes_lonlat(
     dx_deg = r_km / (KM_PER_DEG_LAT * np.clip(np.cos(np.deg2rad(lat)), 1e-6, None))
 
     def make_collection(values_log1p: np.ndarray) -> PatchCollection:
-        patches = [Ellipse((float(x), float(y)), width=float(2.0 * wx), height=float(2.0 * dy_deg))
-                   for x, y, wx in zip(lon, lat, dx_deg)]
+        patches = [Ellipse((float(x), float(y)), width=float(2.0 * wx), height=float(2.0 * dy_deg)) for x, y, wx in zip(lon, lat, dx_deg)]
         pc = PatchCollection(patches, array=values_log1p, norm=norm, linewidths=0.0)
         return pc
 
@@ -1219,10 +1179,7 @@ def _plot_node_circles_lonlat_single(
     dy_deg = r_km / KM_PER_DEG_LAT
     dx_deg = r_km / (KM_PER_DEG_LAT * np.clip(np.cos(np.deg2rad(lat)), 1e-6, None))
 
-    patches = [
-        Ellipse((float(x), float(y)), width=float(2.0 * wx), height=float(2.0 * dy_deg))
-        for x, y, wx in zip(lon, lat, dx_deg)
-    ]
+    patches = [Ellipse((float(x), float(y)), width=float(2.0 * wx), height=float(2.0 * dy_deg)) for x, y, wx in zip(lon, lat, dx_deg)]
     pc = PatchCollection(patches, array=vals, norm=norm, linewidths=0.0)
 
     fig, ax = plt.subplots(1, 1, figsize=(9, 7), constrained_layout=True)
@@ -1260,17 +1217,8 @@ def _plot_pearson_residuals_year_nodes_lonlat(
     R = np.asarray(R_node, float)
     R_plot = _signed_log1p_scale(R)
 
-    _plot_node_circles_lonlat_single(
-        msh_path=msh_path,
-        epsg_project=epsg_project,
-        out_png=out_png,
-        values=R_plot,
-        title=f"Pearson residuals (signed log1p), {year}",
-        h_km=h_km,
-        cities=cities,
-        vlim=float(vlim_log),
-        cbar_label="sign(R) · log(1 + |R|)",
-    )
+    _plot_node_circles_lonlat_single(msh_path=msh_path, epsg_project=epsg_project, out_png=out_png, values=R_plot,
+        title=f"Pearson residuals (signed log1p), {year}", h_km=h_km, cities=cities, vlim=float(vlim_log), cbar_label="sign(R) · log(1 + |R|)")
     
     
 def _nice_vmax_1digit(M: float) -> float:
@@ -1371,19 +1319,8 @@ def _apply_colorbar_ticklabels(cbar, vmin: float, vmax: float) -> None:
     cbar.set_ticklabels([_fmt_plain_or_phys_001_999(t) for t in ticks])
 
 
-def _plot_uvIJ_and_w_year_lonlat(
-    msh_path: Path,
-    epsg_project: int,
-    out_png_uvij: Path,
-    out_png_w: Path,
-    u: np.ndarray,
-    v: np.ndarray,
-    I: np.ndarray,
-    J: np.ndarray,
-    year: int,
-    h_km: float,
-    cities: Optional[Dict[str, Sequence[float]]] = None,
-):
+def _plot_uvIJ_and_w_year_lonlat(msh_path: Path, epsg_project: int, out_png_uvij: Path, out_png_w: Path, u: np.ndarray,
+    v: np.ndarray, I: np.ndarray, J: np.ndarray, year: int, h_km: float, cities: Optional[Dict[str, Sequence[float]]] = None):
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
     from matplotlib.patches import Ellipse
@@ -1401,10 +1338,7 @@ def _plot_uvIJ_and_w_year_lonlat(
     dy_deg = r_km / KM_PER_DEG_LAT
     dx_deg = r_km / (KM_PER_DEG_LAT * np.clip(np.cos(np.deg2rad(lat)), 1e-6, None))
 
-    patches = [
-        Ellipse((float(x), float(y)), width=float(2.0 * wx), height=float(2.0 * dy_deg))
-        for x, y, wx in zip(lon, lat, dx_deg)
-    ]
+    patches = [Ellipse((float(x), float(y)), width=float(2.0 * wx), height=float(2.0 * dy_deg)) for x, y, wx in zip(lon, lat, dx_deg)]
 
     u = np.asarray(u, float)
     v = np.asarray(v, float)
@@ -1504,35 +1438,13 @@ def _plot_uvIJ_and_w_year_lonlat(
     plt.close(figw)
 
 
-def _plot_total_counts_monthly_bass_vs_gsb_vs_data(
-    sol: GSBSolution,
-    funcs: GSBFunctions,
-    params: Dict[str, float],
-    events_df: pd.DataFrame,
-    epsg_project: int,
-    out_png: Path,
-    start_month: str,
-    end_month: str,
-    chunk_size: int = 2000,
-    lambda_floor: float = 1e-30,
-):
-    y_month, month_labels, K_total, K_inside = bin_events_month_total_inside_mesh(
-        mesh=sol.mesh,
-        events_df=events_df,
-        epsg_project=epsg_project,
-        start_month=start_month,
-        end_month=end_month,
-        chunk_size=chunk_size,
-    )
+def _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol: GSBSolution, funcs: GSBFunctions, params: Dict[str, float], events_df: pd.DataFrame,
+    epsg_project: int, out_png: Path, start_month: str, end_month: str, chunk_size: int = 2000, lambda_floor: float = 1e-30):
+    y_month, month_labels, K_total, K_inside = bin_events_month_total_inside_mesh(mesh=sol.mesh, events_df=events_df, epsg_project=epsg_project,
+        start_month=start_month, end_month=end_month, chunk_size=chunk_size)
 
     month_edges_years = make_month_edges_years(sol.YEAR0, start_month=start_month, end_month=end_month)
-    mu_month = expected_counts_month_total(
-        sol=sol,
-        funcs=funcs,
-        params=params,
-        month_edges_years=month_edges_years,
-        lambda_floor=lambda_floor,
-    )
+    mu_month = expected_counts_month_total(sol=sol, funcs=funcs, params=params, month_edges_years=month_edges_years, lambda_floor=lambda_floor)
 
     p_hat, q_hat, M_hat, bass_month = fit_bass_to_monthly_counts(
         y_month=y_month,
@@ -1622,29 +1534,18 @@ class Runner:
         T_years = float(self.time_params.get("T_years", max(0.0, 2023.0 - start_year)))
 
         epsg = int(self.mesh_params.get("epsg_project", 5070))
-        return FEMConfig(
-            tau_years=tau,
-            T_years=T_years,
-            picard_max_iter=int(self.time_params.get("picard_max_iter", 20)),
-            picard_tol=float(self.time_params.get("picard_tol", 1e-8)),
-            verbose=bool(self.fem_verbose),
-            YEAR0=float(start_year),
-            epsg_project=epsg,
-        )
+        return FEMConfig(tau_years=tau, T_years=T_years, picard_max_iter=int(self.time_params.get("picard_max_iter", 20)),
+            picard_tol=float(self.time_params.get("picard_tol", 1e-8)), verbose=bool(self.fem_verbose), YEAR0=float(start_year), epsg_project=epsg)
 
     def build_functions(self) -> GSBFunctions:
         return make_default_gsb_functions(self.model_params)
 
     def build_params(self) -> Dict[str, float]:
+        r0 = float(self.model_params.get("r0", self.model_params.get("r", 1.0)))
+        r1 = float(self.model_params.get("r1", 0.0))
         # Keep only the solver-needed parameters here.
-        return dict(
-            r=float(self.model_params.get("r", 1.0)),
-            p=float(self.model_params.get("p", 0.01)),
-            q_I=float(self.model_params.get("q_I", 0.1)),
-            k_J=float(self.model_params.get("k_J", 0.0)),
-            D=float(self.model_params.get("D", 0.0)),
-            gamma_J=float(self.model_params.get("gamma_J", 0.0)),
-            S0=float(self.model_params.get("S0", 0.0)),
+        return dict(r0=r0, r1=r1, p=float(self.model_params.get("p", 0.01)), q_I=float(self.model_params.get("q_I", 0.1)),
+            k_J=float(self.model_params.get("k_J", 0.0)), D=float(self.model_params.get("D", 0.0)), gamma_J=float(self.model_params.get("gamma_J", 0.0)), S0=float(self.model_params.get("S0", 0.0)),
         )
 
     # ---- part 1: mesh building ----
@@ -1671,14 +1572,7 @@ class Runner:
             return msh
 
         t0 = time.perf_counter()
-        build_mesh_from_admin1_region(
-            admin1_shp,
-            state_list,
-            msh,
-            cfg,
-            verbose=bool(self.mesh_verbose),
-            model_name=f"{self.out_folder}_mesh_km",
-        )
+        build_mesh_from_admin1_region(admin1_shp, state_list, msh, cfg, verbose=bool(self.mesh_verbose), model_name=f"{self.out_folder}_mesh_km")
         self.log(f"build_mesh_from_admin1_region complete ({time.perf_counter() - t0:.3f} s)")
         self.log("self.build_mesh complete")
         return msh
@@ -1705,24 +1599,56 @@ class Runner:
         cache = build_fem_stage_cache(msh, fem_cfg, log=lambda s: self.log(s))
         self.log(f"build_fem_stage_cache complete ({time.perf_counter() - t0:.3f} s)")
 
-        # --- solve ---
-        t0 = time.perf_counter()
-        sol = solve_gsb_fem(msh, funcs, params, fem_cfg, cache=cache, log=lambda s: self.log(s))
-        self.log(f"solve_gsb_fem complete ({time.perf_counter() - t0:.3f} s)")
-
         # --- events load + filter ---
         events_df = pd.read_csv(self.events_csv)
         if "date" not in events_df.columns or "longitude" not in events_df.columns or "latitude" not in events_df.columns:
             raise ValueError("events CSV must contain: date, longitude, latitude.")
         if self.events_state_col not in events_df.columns:
             raise ValueError(f"events CSV must contain a '{self.events_state_col}' column.")
-
+        
         events_df[self.events_state_col] = events_df[self.events_state_col].astype(str).str.strip()
         state_list = list(self.mesh_params["state_list"])
         if len(state_list) != 1:
             raise ValueError("Runner.run_FEM currently expects exactly one state in state_list (for CSV filtering).")
         st = str(state_list[0]).strip()
         events_df = events_df.loc[events_df[self.events_state_col] == st].copy()
+        
+        # --- cost nodes aligned to FEM snapshots (calendar-year proxy) ---
+        cal_years = (float(fem_cfg.YEAR0) + np.asarray(cache.times, float)).tolist()
+        
+        t0 = time.perf_counter()
+        out_cost = get_batch_nodal_cost(
+            cache.mesh,
+            cal_years,
+            events_df=events_df,
+            epsg_project=fem_cfg.epsg_project,
+        
+            price_col=str(self.time_params.get("price_col", "price")),
+            date_col=str(self.time_params.get("cost_date_col", "date")),
+            missing_price_value=float(self.time_params.get("missing_price_value", -1.0)),
+            trim_q=float(self.time_params.get("trim_q", 0.20)),
+            chunk_size=int(self.time_params.get("cost_chunk_size", 50_000)),
+        
+            cpi_adjust=bool(self.time_params.get("cpi_adjust", True)),
+            base_year=int(self.time_params.get("base_year", 2025)),
+            base_month=self.time_params.get("base_month", 12),
+            cpi_cache_csv=(Path(self.time_params["cpi_cache_csv"]) if "cpi_cache_csv" in self.time_params else None),
+        
+            use_cache=True,
+            min_events_for_trim=int(self.time_params.get("min_events_for_trim", 10)),
+        )
+        cost_nodes = np.asarray(out_cost["cost_nodes"], float)
+        if cost_nodes.shape != cache.rho_total.shape:
+            raise RuntimeError(f"cost_nodes shape {cost_nodes.shape} != rho_total shape {cache.rho_total.shape}")
+        cache.cost_nodes = cost_nodes
+        self.log(f"get_batch_nodal_cost complete ({time.perf_counter() - t0:.3f} s)")
+        self.log(f"[cost] mean statewide median={float(np.mean(out_cost['statewide_median'])):.4g}, "
+                 f"events used total={int(np.sum(out_cost['n_events_used'])):,}")
+        
+        # --- solve ---
+        t0 = time.perf_counter()
+        sol = solve_gsb_fem(msh, funcs, params, fem_cfg, cache=cache, log=lambda s: self.log(s))
+        self.log(f"solve_gsb_fem complete ({time.perf_counter() - t0:.3f} s)")
 
         # --- year window ---
         start_year = float(self.time_params["start_year"])
@@ -1730,11 +1656,7 @@ class Runner:
         t_min_year = int(self.time_params.get("t_min_year", int(np.floor(start_year))))
         t_max_year = int(self.time_params.get("t_max_year", 2023))
 
-        year_edges_years = make_year_edges_years(
-            YEAR0=fem_cfg.YEAR0,
-            start_year=t_min_year,
-            end_year=t_max_year,
-        )
+        year_edges_years = make_year_edges_years(YEAR0=fem_cfg.YEAR0, start_year=t_min_year, end_year=t_max_year)
 
         # --- bin yearly node counts ---
         t0 = time.perf_counter()
@@ -1799,30 +1721,14 @@ class Runner:
 
             out_png = self.fig_dir / f"{st.lower()}_data_vs_mu_nodes_{yy}.png"
             t0 = time.perf_counter()
-            _plot_data_vs_mu_year_nodes_lonlat(
-                msh_path=msh,
-                epsg_project=fem_cfg.epsg_project,
-                out_png=out_png,
-                y_node=y_node,
-                mu_node=mu_y,
-                year=int(yy),
-                h_km=h_km,
-                cities=self.cities,
-            )
+            _plot_data_vs_mu_year_nodes_lonlat(msh_path=msh, epsg_project=fem_cfg.epsg_project, out_png=out_png,
+                y_node=y_node, mu_node=mu_y, year=int(yy), h_km=h_km, cities=self.cities)
             self.log(f"_plot_data_vs_mu_year_nodes_lonlat complete ({time.perf_counter() - t0:.3f} s)")
 
             out_png_R = self.fig_dir / f"{st.lower()}_pearson_residual_nodes_{yy}.png"
             t0 = time.perf_counter()
-            _plot_pearson_residuals_year_nodes_lonlat(
-                msh_path=msh,
-                epsg_project=fem_cfg.epsg_project,
-                out_png=out_png_R,
-                R_node=R[idx, :],
-                year=int(yy),
-                h_km=h_km,
-                cities=self.cities,
-                vlim_log=float(self.time_params.get("vlim_log", 2.5)),
-            )
+            _plot_pearson_residuals_year_nodes_lonlat(msh_path=msh, epsg_project=fem_cfg.epsg_project, out_png=out_png_R,
+                R_node=R[idx, :], year=int(yy), h_km=h_km, cities=self.cities, vlim_log=float(self.time_params.get("vlim_log", 2.5)))
             self.log(f"_plot_pearson_residuals_year_nodes_lonlat complete ({time.perf_counter() - t0:.3f} s)")
 
             # choose snapshot closest to Jan 1 of yy
@@ -1832,19 +1738,8 @@ class Runner:
             out_png_uvij = self.fig_dir / f"{st.lower()}_uvIJ_nodes_{yy}.png"
             out_png_w = self.fig_dir / f"{st.lower()}_w_nodes_{yy}.png"
             t0 = time.perf_counter()
-            _plot_uvIJ_and_w_year_lonlat(
-                msh_path=msh,
-                epsg_project=fem_cfg.epsg_project,
-                out_png_uvij=out_png_uvij,
-                out_png_w=out_png_w,
-                u=sol.U[k_snap],
-                v=sol.V[k_snap],
-                I=sol.I[k_snap],
-                J=sol.J[k_snap],
-                year=int(yy),
-                h_km=h_km,
-                cities=self.cities,
-            )
+            _plot_uvIJ_and_w_year_lonlat(msh_path=msh, epsg_project=fem_cfg.epsg_project, out_png_uvij=out_png_uvij, out_png_w=out_png_w,
+                u=sol.U[k_snap], v=sol.V[k_snap], I=sol.I[k_snap], J=sol.J[k_snap], year=int(yy), h_km=h_km, cities=self.cities)
             self.log(f"_plot_uvIJ_and_w_year_lonlat complete ({time.perf_counter() - t0:.3f} s)")
 
         # --- monthly totals plot ---
@@ -1852,31 +1747,13 @@ class Runner:
         end_month   = f"{int(t_max_year):04d}-12"
         monthly_png = self.fig_dir / f"{st.lower()}_monthly_totals_bass_vs_gsb_vs_data.png"
         t0 = time.perf_counter()
-        _plot_total_counts_monthly_bass_vs_gsb_vs_data(
-            sol=sol,
-            funcs=funcs,
-            params=params,
-            events_df=events_df,
-            epsg_project=fem_cfg.epsg_project,
-            out_png=monthly_png,
-            start_month=start_month,
-            end_month=end_month,
-            chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
-            lambda_floor=float(self.time_params.get("lambda_floor", 1e-30)),
-        )
+        _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol=sol, funcs=funcs, params=params, events_df=events_df, epsg_project=fem_cfg.epsg_project, out_png=monthly_png,
+            start_month=start_month, end_month=end_month, chunk_size=int(self.time_params.get("bin_chunk_size", 5000)), lambda_floor=float(self.time_params.get("lambda_floor", 1e-30)))
         self.log(f"_plot_total_counts_monthly_bass_vs_gsb_vs_data complete ({time.perf_counter() - t0:.3f} s)")
 
         self.log("self.run_FEM complete")
-        return dict(
-            out_folder=self.out_folder,
-            state=st,
-            mesh=str(msh),
-            figures=str(self.fig_dir),
-            K_total=K_total,
-            K_inside=K_inside,
-            deviance=D_total,
-            pearson_rms=R_rms,
-        )
+        return dict(out_folder=self.out_folder, state=st, mesh=str(msh), figures=str(self.fig_dir),
+            K_total=K_total, K_inside=K_inside, deviance=D_total, pearson_rms=R_rms)
 
 
 # =============================================================================
@@ -1908,20 +1785,8 @@ def run_parallel(
     specs: List[Dict[str, Any]] = []
     for r in runners:
         # Convert to a plain dict spec (pickle-friendly).
-        specs.append(dict(
-            out_folder=r.out_folder,
-            mesh_params=r.mesh_params,
-            model_params=r.model_params,
-            time_params=r.time_params,
-            fem_verbose=r.fem_verbose,
-            mesh_verbose=r.mesh_verbose,
-            cities=r.cities,
-            years_to_plot=r.years_to_plot,
-            month_window=r.month_window,
-            events_csv=r.events_csv,
-            events_state_col=r.events_state_col,
-            base_out=r.base_out,
-        ))
+        specs.append(dict(out_folder=r.out_folder, mesh_params=r.mesh_params, model_params=r.model_params, time_params=r.time_params, fem_verbose=r.fem_verbose, mesh_verbose=r.mesh_verbose, 
+            cities=r.cities, years_to_plot=r.years_to_plot, month_window=r.month_window, events_csv=r.events_csv, events_state_col=r.events_state_col, base_out=r.base_out))
 
     results: List[Dict[str, Any]] = []
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
@@ -1945,7 +1810,8 @@ if __name__ == "__main__":
             epsg_project=5070,
         ),
         model_params=dict(
-            r=0.229142,
+            r_0=0.229142,
+            r_1=0,
             p=3.47502e-05,
             q_I=0.00616679,
             gamma_J=0.000594882,
@@ -1961,9 +1827,14 @@ if __name__ == "__main__":
             picard_tol=1e-8,
             t_min_year=2002,
             t_max_year=2024,
-        ),
-        fem_verbose=False,
-        mesh_verbose=False,
+            
+            cpi_adjust=True,
+            base_year=2025,
+            base_month=12,
+            cpi_cache_csv="data/cache/cpi_monthly_cpiaucsl.csv"
+            ),
+            fem_verbose=False,
+            mesh_verbose=False,
     )
 
     # Optional: cities for plots

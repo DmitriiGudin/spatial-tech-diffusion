@@ -1824,12 +1824,12 @@ def run_parallel(
 
 
 # =============================================================================
-# Example usage
+# Example for New York: create runner, build mesh, run FEM, produce diagnostics
 # =============================================================================
 
 if __name__ == "__main__":
     runner = Runner(
-        out_folder="debug_ny_run",
+        out_folder="example_ny_run",
         mesh_params=dict(
             state_list=["NY"],
             h_km=6,

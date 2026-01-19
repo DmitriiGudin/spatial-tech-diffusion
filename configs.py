@@ -25,7 +25,7 @@ default = dict(
         gamma_J=("pos", 1e-5, 1),
         k_J=("nonneg", 0, 100),
         D=("pos", 1e-3, 1000),
-        S0=("const", 0, 0) # Old: S0=("nonneg", 0, 1000),
+        S0=("const", 0, 0)
     ),
     fem_model_params=dict(
         r0=1,

@@ -105,7 +105,7 @@ def make_base_runner_kwargs_from_configs_default(state_cli: str = "") -> Dict[st
 
     out: Dict[str, Any] = dict(
         mesh_params=mesh_params,
-        model_params=dict(mle_model_params),          # <-- MLE priors/bounds
+        model_params=dict(mle_model_params),
         time_params=time_params,
         spsa_params=spsa_params,
         randomSearch_params=randomSearch_params,
@@ -115,7 +115,6 @@ def make_base_runner_kwargs_from_configs_default(state_cli: str = "") -> Dict[st
         ll_verbose_freq=int(d.get("ll_verbose_freq", 100)),
     )
 
-    # Optional Runner fields if your MLE Runner supports them
     if "base_out" in d:
         out["base_out"] = d["base_out"]
 

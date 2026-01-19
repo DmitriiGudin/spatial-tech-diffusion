@@ -408,7 +408,7 @@ def _events_inside_mesh_mask(mesh, lon: np.ndarray, lat: np.ndarray, epsg_projec
 
     idx = np.flatnonzero(cand)
 
-    # --- NEW: mesh-domain prefilter using boundary polygon (prevents finder errors) ---
+    # --- Mesh-domain prefilter using boundary polygon (prevents finder errors) ---
     if boundary_poly is None:
         boundary_poly = _get_mesh_boundary_polygon(mesh)
 

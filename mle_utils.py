@@ -1094,7 +1094,7 @@ class Runner:
 
 
 # =============================================================================
-# Example for California: create runner, build mesh, run MLE
+# Example for New York: create runner, build mesh, run MLE
 # =============================================================================
 
 if __name__ == "__main__":

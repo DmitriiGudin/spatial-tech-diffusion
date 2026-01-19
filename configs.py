@@ -187,3 +187,34 @@ FL = dict(
         "Jacksonville": [-81.6592, 30.3298]
     },
 )
+
+MN = dict(
+    mesh_params=dict(
+        state_list=['MN'],
+        h_km=8,
+        simplify_km=24, 
+    ),
+    fem_model_params=dict( # TO EDIT
+        r0=0.21682372494611601,
+        r1=0,
+        p=1.7966300331458806e-05,
+        q_I=0.11642553092295363,
+        gamma_J=0.00012305488346120747,
+        k_J=8.576616014263596e-05,
+        D=0.03381577568515316,
+        S0=12.82367787707364,
+    ),
+    time_params=dict(
+        start_year=2003,
+        T_years=20,
+        t_min_year=2002,
+        t_max_year=2024,
+    ),
+    cities={
+        "Minneapolis": [-93.2650, 44.9778],
+        "Duluth": [-92.1055, 46.7845],
+        "Fargo": [-97.1216, 47.0712],
+        "Rochester": [-92.4588, 44.0193],
+        "St Cloud": [-94.1632, 45.5579]
+    },
+)

@@ -270,7 +270,7 @@ def main() -> int:
         print("\n[MAIN] Summary")
         print(f"[MAIN] Elapsed: {dt:.1f} s")
         print(f"[MAIN] Completed: {len(results)}/{n_workers}")
-        print(f"[MAIN] Best: {best_folder} ll={best_ll:.6e} theta={_fmt_theta_compact(best_theta)}")
+        print(f"[MAIN] Best: {best_folder} ll={best_ll:.6e} {_fmt_theta_compact(best_theta)}")
 
     if failures:
         print("\n[MAIN] Failures:", file=sys.stderr)

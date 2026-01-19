@@ -905,16 +905,23 @@ def plot_adoptions_vs_costs(
 
             n_price = g.size().reindex(months).fillna(0.0).to_numpy(float)
 
-        # --- CPI monthly series over same month window ---
-        cpi_start = months.min().strftime("%Y-%m-%d")
-        cpi_end = months.max().strftime("%Y-%m-%d")
+        # --- CPI monthly series over window that INCLUDES the base month ---
+        cpi_m0 = months.min().to_period("M").to_timestamp()
+        cpi_m1 = months.max().to_period("M").to_timestamp()
+        
+        if base_month is not None:
+            base_target = pd.Timestamp(year=int(base_year), month=int(base_month), day=1)
+            cpi_m1 = max(cpi_m1, base_target)
+        
+        cpi_start = cpi_m0.strftime("%Y-%m-%d")
+        cpi_end = cpi_m1.strftime("%Y-%m-%d")
+        
         cpi = fetch_cpi_monthly_fred(cpi_start, cpi_end, cache_csv=cpi_cache_csv)
-
+        base_dt, cpi_base = choose_cpi_base(cpi, base_year=base_year, base_month=base_month)
         cpi = cpi.reindex(pd.to_datetime(months).to_period("M").to_timestamp())
         if cpi.isna().any():
             cpi = cpi.ffill()
 
-        base_dt, cpi_base = choose_cpi_base(cpi, base_year=base_year, base_month=base_month)
         cpi_vals = cpi.to_numpy(float)
         scale = float(cpi_base) / np.maximum(cpi_vals, 1e-12)
 

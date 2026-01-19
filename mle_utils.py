@@ -16,13 +16,12 @@ import pandas as pd
 import time
 import logging
 
-from pyproj import Transformer
-
 from skfem import Basis, MeshTri
 logging.getLogger("skfem").setLevel(logging.ERROR)
 
 from fem_utils import FEMConfig, GSBFunctions, solve_gsb_fem, build_fem_stage_cache, FEMStageCache
 from mesh_utils import MeshBuildConfig, build_mesh_from_admin1_region
+from density_utils import _project_lonlat_to_km, get_batch_nodal_cost
 
 
 # =============================================================================
@@ -80,13 +79,6 @@ def date_to_decimal_year(ts: pd.Timestamp) -> float:
     days = (end - start).days
     frac = (ts - start).days / float(days)
     return float(y) + float(frac)
-
-
-def lonlat_to_km(lon: np.ndarray, lat: np.ndarray, epsg_project: int = 5070) -> Tuple[np.ndarray, np.ndarray]:
-    """Project lon/lat -> EPSG:5070 meters -> km."""
-    tr = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg_project}", always_xy=True)
-    x_m, y_m = tr.transform(lon.astype(float), lat.astype(float))
-    return np.asarray(x_m, float) / 1000.0, np.asarray(y_m, float) / 1000.0
 
 
 # =============================================================================
@@ -162,7 +154,7 @@ def load_events_csv(
 
     lon = df["longitude"].to_numpy(float)
     lat = df["latitude"].to_numpy(float)
-    x_km, y_km = lonlat_to_km(lon, lat, epsg_project=epsg_project)
+    x_km, y_km = _project_lonlat_to_km(lon, lat, epsg_project=epsg_project)
 
     cal_year = df["cal_year"].to_numpy(float)
     t_years = cal_year - float(YEAR0)
@@ -195,15 +187,7 @@ class LikelihoodConfig:
     finder_chunk_size: int = 2000
 
 
-def intensity_lambda_from_fields(
-    u: np.ndarray,
-    v: np.ndarray,
-    I: np.ndarray,
-    rho_adopt: np.ndarray,
-    p: float,
-    q_I: float,
-    F_I_vals: np.ndarray,
-) -> np.ndarray:
+def intensity_lambda_from_fields(u: np.ndarray, v: np.ndarray, I: np.ndarray, rho_adopt: np.ndarray, p: float, q_I: float, F_I_vals: np.ndarray) -> np.ndarray:
     s = np.maximum(1.0 - u - v, 0.0)
     lam = rho_adopt * (float(p) + float(q_I) * F_I_vals) * s
     return lam
@@ -228,12 +212,7 @@ class StagePrecompute:
     N: int
 
 
-def precompute_stage_objects(
-    msh_path: Path,
-    fem_cfg: FEMConfig,
-    events: EventData,
-    ll_cfg: LikelihoodConfig,
-) -> StagePrecompute:
+def precompute_stage_objects(msh_path: Path, fem_cfg: FEMConfig, events: EventData, ll_cfg: LikelihoodConfig) -> StagePrecompute:
     """
     Builds:
       - FEMStageCache (mesh/basis/M/K + rho_total over time + A_nodes)
@@ -243,6 +222,21 @@ def precompute_stage_objects(
     Time binning: nearest snapshot (k = round(t/tau)).
     """
     fem_cache = build_fem_stage_cache(msh_path, fem_cfg)
+    years = (float(fem_cfg.YEAR0) + fem_cache.times).tolist()
+    cpi_cache_csv = Path(str(msh_path) + ".cpi_cache.csv")
+
+    cost_out = get_batch_nodal_cost(fem_cache.mesh, years, events_df=events.raw, epsg_project=int(fem_cfg.epsg_project),
+        cpi_adjust=True, base_year=2026, base_month=12, cpi_cache_csv=cpi_cache_csv, use_cache=True)
+    if "cost_nodes" not in cost_out:
+        raise KeyError("get_batch_nodal_cost did not return 'cost_nodes'. "f"Keys: {list(cost_out.keys())}")
+        
+    cost_nodes = np.asarray(cost_out["cost_nodes"], dtype=float)
+    if cost_nodes.shape != fem_cache.rho_total.shape:
+        raise ValueError(
+            f"cost_nodes shape {cost_nodes.shape} must match rho_total shape {fem_cache.rho_total.shape}."
+        )
+
+    fem_cache.cost_nodes = cost_nodes
 
     mesh = fem_cache.mesh
     basis = fem_cache.basis
@@ -298,15 +292,8 @@ def precompute_stage_objects(
 # Likelihood evaluation (uses stage precompute + FEM cache)
 # =============================================================================
 
-def loglikelihood_theta(
-    msh_path: Path,
-    funcs_template: GSBFunctions,
-    theta: Dict[str, float],
-    fem_cfg: FEMConfig,
-    stage_pre: StagePrecompute,
-    ll_cfg: LikelihoodConfig,
-    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
-) -> float:
+def loglikelihood_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dict[str, float], fem_cfg: FEMConfig,
+    stage_pre: StagePrecompute, ll_cfg: LikelihoodConfig, sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,) -> float:
     """
     Poisson log-likelihood for theta on a nodal discretization.
 
@@ -318,13 +305,7 @@ def loglikelihood_theta(
     if sync_boxes is not None:
         sync_boxes(theta)
 
-    sol = solve_gsb_fem(
-        msh_path,
-        funcs_template,
-        theta,
-        fem_cfg,
-        cache=stage_pre.fem_cache,
-    )
+    sol = solve_gsb_fem(msh_path, funcs_template, theta, fem_cfg, cache=stage_pre.fem_cache)
 
     p = float(theta["p"])
     q_I = float(theta["q_I"])
@@ -350,11 +331,7 @@ def loglikelihood_theta(
         rho_adopt_nodes = sol.rho_adopt[k]
 
         FI = funcs_template.F_I(I)
-        lam_nodes = intensity_lambda_from_fields(
-            u=u, v=v, I=I,
-            rho_adopt=rho_adopt_nodes,
-            p=p, q_I=q_I, F_I_vals=FI,
-        )
+        lam_nodes = intensity_lambda_from_fields(u=u, v=v, I=I, rho_adopt=rho_adopt_nodes, p=p, q_I=q_I, F_I_vals=FI)
         
         # If the model ever produces NaN/Inf, reject immediately
         if not np.all(np.isfinite(lam_nodes)):
@@ -557,7 +534,7 @@ class FitResult:
     history: List[Tuple[int, float, Dict[str, float]]]
 
 def _fmt_theta_compact(th: Dict[str, float]) -> str:
-    keys = ["r","p","q_I","gamma_J","k_J","D","S0"]
+    keys = ["r0", "r1", "p", "q_I", "gamma_J", "k_J", "D", "S0"]
     return " ".join([f"{k}={th[k]:.6g}" for k in keys if k in th])
 
 def run_spsa_stage(
@@ -759,10 +736,7 @@ def random_search_candidates(
 
     for i in range(n_eval):
         th = sample_theta_from_ranges(rng, specs, theta_ranges)
-        ll = loglikelihood_theta(
-            stage.msh_path, funcs_template, th, stage.fem_cfg,
-            stage_pre, ll_cfg, sync_boxes=sync_boxes
-        )
+        ll = loglikelihood_theta(stage.msh_path, funcs_template, th, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes)
         if np.isfinite(ll):
             scored.append((float(ll), th))
             
@@ -777,11 +751,7 @@ def random_search_candidates(
     return scored
 
 
-def _keep_top(
-    scored: List[Tuple[float, Dict[str, float]]],
-    K_keep: Optional[int],
-    keep_frac: Optional[float],
-) -> List[Tuple[float, Dict[str, float]]]:
+def _keep_top(scored: List[Tuple[float, Dict[str, float]]], K_keep: Optional[int], keep_frac: Optional[float]) -> List[Tuple[float, Dict[str, float]]]:
     if not scored:
         return []
     if K_keep is not None:
@@ -792,16 +762,9 @@ def _keep_top(
     return scored[:k]
 
 
-def multi_start_refine(
-    stage: StageConfig,
-    funcs_template: GSBFunctions,
-    specs: List[ParamSpec],
-    stage_pre: StagePrecompute,
-    ll_cfg: LikelihoodConfig,
-    rs_cfg: RandomSearchConfig,
-    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
-    progress: Optional[Callable[[int], None]] = None,   # <-- add
-) -> Tuple[np.ndarray, FitResult]:
+def multi_start_refine(stage: StageConfig, funcs_template: GSBFunctions, specs: List[ParamSpec], stage_pre: StagePrecompute, ll_cfg: LikelihoodConfig, rs_cfg: RandomSearchConfig, 
+    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, progress: Optional[Callable[[int], None]] = None) -> Tuple[np.ndarray, FitResult]:
+    
     scored = random_search_candidates(stage, funcs_template, specs, stage_pre, ll_cfg, rs_cfg, sync_boxes=sync_boxes, progress=progress,)
     if not scored:
         raise RuntimeError("Random search produced no finite likelihood candidates.")
@@ -818,12 +781,7 @@ def multi_start_refine(
             opt_cfg.n_iter = int(n_iter)
             opt_cfg.seed = int(rs_cfg.seed + 10_000 * si + j)
 
-            stage_local = StageConfig(
-                mesh_cfg=stage.mesh_cfg,
-                fem_cfg=stage.fem_cfg,
-                opt_cfg=opt_cfg,
-                msh_path=stage.msh_path,
-            )
+            stage_local = StageConfig(mesh_cfg=stage.mesh_cfg, fem_cfg=stage.fem_cfg, opt_cfg=opt_cfg, msh_path=stage.msh_path)
 
             z0 = pack_theta_to_z(th_seed, specs)
             z_best, res = run_spsa_stage(stage_local, funcs_template, z0, specs, stage_pre, ll_cfg, sync_boxes=sync_boxes, progress=progress)
@@ -847,12 +805,7 @@ def multi_start_refine(
     opt_cfg.n_iter = int(rs_cfg.final_n_iter)
     opt_cfg.seed = int(rs_cfg.seed + 999_999)
 
-    stage_final = StageConfig(
-        mesh_cfg=stage.mesh_cfg,
-        fem_cfg=stage.fem_cfg,
-        opt_cfg=opt_cfg,
-        msh_path=stage.msh_path,
-    )
+    stage_final = StageConfig(mesh_cfg=stage.mesh_cfg, fem_cfg=stage.fem_cfg, opt_cfg=opt_cfg, msh_path=stage.msh_path)
 
     z0 = pack_theta_to_z(best_th, specs)
     z_best, res_best = run_spsa_stage(stage_final, funcs_template, z0, specs, stage_pre, ll_cfg, sync_boxes=sync_boxes, progress=progress)
@@ -865,11 +818,7 @@ def multi_start_refine(
     return z_best, res_best
 
 
-def save_candidates_csv(
-    candidates: List[Tuple[float, Dict[str, float]]],
-    out_csv: Path,
-    specs: List[ParamSpec],
-) -> None:
+def save_candidates_csv(candidates: List[Tuple[float, Dict[str, float]]], out_csv: Path, specs: List[ParamSpec]) -> None:
     """
     candidates: [(ll, theta), ...] assumed already sorted desc by ll (but we re-sort anyway).
     """
@@ -1008,14 +957,7 @@ class Runner:
             msh_path = self.mesh_dir / self._mesh_filename()
 
             if not msh_path.exists():
-                build_mesh_from_admin1_region(
-                    self.admin1_shp,
-                    state_list,
-                    msh_path,
-                    cfg,
-                    verbose=self.mesh_verbose,
-                    model_name=f"mesh_{self.out_folder}",
-                )
+                build_mesh_from_admin1_region(self.admin1_shp, state_list, msh_path, cfg, verbose=self.mesh_verbose, model_name=f"mesh_{self.out_folder}")
 
             self.msh_path = msh_path
             return msh_path
@@ -1063,14 +1005,7 @@ class Runner:
         def mu_prime(J: np.ndarray) -> np.ndarray:
             return np.full_like(np.asarray(J, float), float(D_box["D"]), dtype=float)
 
-        funcs = GSBFunctions(
-            S=S_const,
-            F_I=F_I,
-            G=G,
-            F_J=F_J,
-            F_J_prime=F_J_prime,
-            mu_prime=mu_prime,
-        )
+        funcs = GSBFunctions(S=S_const, F_I=F_I, G=G, F_J=F_J, F_J_prime=F_J_prime, mu_prime=mu_prime)
 
         def sync_boxes(theta: Dict[str, float]) -> None:
             # only update what the funcs read
@@ -1106,37 +1041,18 @@ class Runner:
             YEAR0 = float(self.time_params["start_year"])
             tau = float(self.time_params["tau"])
 
-            events = load_events_csv(
-                self.events_csv,
-                region_states=list(self.mesh_params["state_list"]),
-                YEAR0=YEAR0,
-                epsg_project=self.epsg_project,
-                min_year=self.events_min_year if self.events_min_year is not None else YEAR0,
-                max_year=self.events_max_year,
-            )
+            events = load_events_csv(self.events_csv, region_states=list(self.mesh_params["state_list"]), YEAR0=YEAR0, epsg_project=self.epsg_project, 
+                min_year=self.events_min_year if self.events_min_year is not None else YEAR0, max_year=self.events_max_year)
 
             t_max = float(np.max(events.t_years)) if events.t_years.size else 0.0
-            ll_cfg = LikelihoodConfig(
-                t_min=0.0,
-                t_max=t_max,
-                lambda_floor=self.ll_lambda_floor,
-                verbose=self.ll_verbose,
-                normalize_by_events=self.ll_normalize_by_events,
-                finder_chunk_size=self.ll_finder_chunk_size,
-            )
+            ll_cfg = LikelihoodConfig(t_min=0, t_max=t_max, lambda_floor=self.ll_lambda_floor, verbose=self.ll_verbose,
+                normalize_by_events=self.ll_normalize_by_events, finder_chunk_size=self.ll_finder_chunk_size)
 
             funcs, sync_boxes = self._build_funcs_template()
             specs = self._build_specs()
 
-            fem_cfg = FEMConfig(
-                tau_years=tau,
-                T_years=ll_cfg.t_max,
-                picard_max_iter=self.picard_max_iter,
-                picard_tol=self.picard_tol,
-                verbose=self.fem_verbose,
-                YEAR0=YEAR0,
-                epsg_project=self.epsg_project,
-            )
+            fem_cfg = FEMConfig(tau_years=tau, T_years=ll_cfg.t_max, picard_max_iter=self.picard_max_iter, picard_tol=self.picard_tol,
+                verbose=self.fem_verbose, YEAR0=YEAR0, epsg_project=self.epsg_project)
 
             opt_cfg = SPSAConfig(
                 n_iter=int(self.spsa_params["n_iter"]),
@@ -1149,54 +1065,25 @@ class Runner:
                 step_clip=float(self.spsa_params["step_clip"]),
             )
 
-            stage = StageConfig(
-                mesh_cfg=MeshBuildConfig(
-                    h_km=float(self.mesh_params["h_km"]),
-                    simplify_km=float(self.mesh_params["simplify_km"]),
-                    epsg_project=self.epsg_project,
-                ),
-                fem_cfg=fem_cfg,
-                opt_cfg=opt_cfg,
-                msh_path=self.msh_path,
-            )
+            stage = StageConfig(mesh_cfg=MeshBuildConfig(h_km=float(self.mesh_params["h_km"]), simplify_km=float(self.mesh_params["simplify_km"]), epsg_project=self.epsg_project),
+                fem_cfg=fem_cfg, opt_cfg=opt_cfg, msh_path=self.msh_path)
 
             stage_pre = precompute_stage_objects(stage.msh_path, stage.fem_cfg, events, ll_cfg)
 
-            rs_cfg = RandomSearchConfig(
-                N_0=int(self.randomSearch_params["N_0"]),
-                stages=tuple(self.randomSearch_params["stages"]),
-                final_n_iter=int(self.spsa_params["n_iter"]),
-                seed=int(self.randomSearch_params["seed"]),
-                theta_ranges=None,
-                save_dir=self.csv_dir,
-                save_prefix=self.rs_save_prefix,
-            )
+            rs_cfg = RandomSearchConfig(N_0=int(self.randomSearch_params["N_0"]), stages=tuple(self.randomSearch_params["stages"]), final_n_iter=int(self.spsa_params["n_iter"]),
+                seed=int(self.randomSearch_params["seed"]), theta_ranges=None, save_dir=self.csv_dir, save_prefix=self.rs_save_prefix)
 
             # -------------------------
             # Progress tracking (timestamped)
             # -------------------------
-            total_iters = int(rs_cfg.N_0) \
-                + int(sum(int(K) * int(nit) for (K, nit) in rs_cfg.stages)) \
-                + int(rs_cfg.final_n_iter)
+            total_iters = int(rs_cfg.N_0) + int(sum(int(K) * int(nit) for (K, nit) in rs_cfg.stages)) + int(rs_cfg.final_n_iter)
 
-            tracker = ProgressTracker(
-                total=total_iters,
-                freq=self.ll_verbose_freq,
-                printer=lambda s: self._log(s),   # <-- timestamps + out_folder
-            )
+            tracker = ProgressTracker(total=total_iters, freq=self.ll_verbose_freq, printer=lambda s: self._log(s))
 
             progress_cb = tracker.tick if (self.ll_verbose_freq is not None and self.ll_verbose_freq > 0) else None
 
-            z_best, res_best = multi_start_refine(
-                stage=stage,
-                funcs_template=funcs,
-                specs=specs,
-                stage_pre=stage_pre,
-                ll_cfg=ll_cfg,
-                rs_cfg=rs_cfg,
-                sync_boxes=sync_boxes,
-                progress=progress_cb,
-            )
+            z_best, res_best = multi_start_refine(stage=stage, funcs_template=funcs, specs=specs, stage_pre=stage_pre, ll_cfg=ll_cfg, rs_cfg=rs_cfg,
+                sync_boxes=sync_boxes, progress=progress_cb)
 
             trace_png = self.fig_dir / f"{self.rs_save_prefix}_loglik_trace.png"
             save_ll_trace(res_best.history, trace_png)
@@ -1212,27 +1099,29 @@ class Runner:
 
 if __name__ == "__main__":
     runner = Runner(
-        out_folder="ca_run1",
+        #out_folder="example_ny_run",
+        out_folder="debug_run",
         mesh_params=dict(
-            state_list=["CA"],
-            h_km=12,
-            simplify_km=36,
+            state_list=["NY"],
+            h_km=6,
+            simplify_km=18,
         ),
         model_params=dict(
-            r=("pos", 0.15, 5),
+            r0=("pos", 0.15, 5),
+            r1=("nonneg", 0, 10),
             p=("pos", 1e-5, 1),
             q_I=("pos", 1e-5, 1),
             gamma_J=("pos", 1e-5, 10),
-            k_J=("nonneg", 0, 5),
-            D=("pos", 1e-3, 10),
-            S0=("nonneg", 0, 1000),
+            k_J=("nonneg", 0, 1),
+            D=("pos", 1, 1e5),
+            S0=("const", 0, 0),
         ),
         time_params=dict(
             start_year=2003.375,
             tau=0.025,
         ),
         spsa_params=dict(
-            n_iter=1000,
+            n_iter=100,
             a=0.2,
             c=0.2,
             gamma=0,
@@ -1241,8 +1130,8 @@ if __name__ == "__main__":
             step_clip=10,
         ),
         randomSearch_params=dict(
-            N_0=1000,
-            stages=((100, 10), (20, 50)),
+            N_0=100,
+            stages=((25, 4), (5, 20)),
             seed=0,
         ),
         fem_verbose=False,

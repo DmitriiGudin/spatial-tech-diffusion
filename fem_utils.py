@@ -41,12 +41,13 @@ from scipy.optimize import minimize
 
 import meshio
 from pyproj import Transformer
+from functools import lru_cache
 
 from skfem import Basis, MeshTri, ElementTriP1, asm, BilinearForm
 from skfem.models.poisson import laplace
 logging.getLogger("skfem").setLevel(logging.ERROR)
 
-from density_utils import get_batch_nodal_density, get_batch_nodal_cost
+from density_utils import get_batch_nodal_density, get_batch_nodal_cost, _get_mesh_boundary_polygon, _boundary_poly_to_mpl_path
 
 
 # =============================================================================
@@ -260,13 +261,7 @@ def build_fem_stage_cache(msh_path: Path, cfg: FEMConfig, log: Optional[Callable
     if log is not None:
         log(f"build_fem_stage_cache: nodes={N}, steps={nsteps}, tau={tau} years, nt={len(years)}")
 
-    out = get_batch_nodal_density(
-        mesh,
-        years,
-        epsg_project=cfg.epsg_project,
-        return_masses=True,
-        use_cache=True,
-    )
+    out = get_batch_nodal_density(mesh, years, epsg_project=cfg.epsg_project, return_masses=True, use_cache=True)
     rho_total = np.asarray(out["rho_nodes"], dtype=float)  # (nt,N)
     A_nodes = np.asarray(out["A_nodes"], dtype=float)      # (N,)
     if cost_nodes is not None:
@@ -694,95 +689,159 @@ def make_year_edges_years(YEAR0: float, start_year: int, end_year: int) -> np.nd
 # Data binning to NODES
 # =============================================================================
 
-def _project_lonlat_to_km(lon: np.ndarray, lat: np.ndarray, epsg_project: int) -> Tuple[np.ndarray, np.ndarray]:
-    tr = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg_project}", always_xy=True)
-    x_m, y_m = tr.transform(lon.astype(float), lat.astype(float))
+@lru_cache(maxsize=16)
+def _get_fwd_transformer(epsg_project: int) -> Transformer:
+    return Transformer.from_crs("EPSG:4326", f"EPSG:{int(epsg_project)}", always_xy=True)
+
+def _project_lonlat_to_km(lon, lat, *, epsg_project: int = 5070):
+    lon = np.asarray(lon, float)
+    lat = np.asarray(lat, float)
+    fwd = _get_fwd_transformer(int(epsg_project))
+    x_m, y_m = fwd.transform(lon, lat)
     return np.asarray(x_m, float) / 1000.0, np.asarray(y_m, float) / 1000.0
 
 
-def bin_events_year_node(mesh: MeshTri, events_df: pd.DataFrame, epsg_project: int = 5070, t_min_year: int = 1998, t_max_year: int = 2025,
-    chunk_size: int = 5000) -> Tuple[np.ndarray, int, int, np.ndarray, Optional[pd.Timestamp], Optional[pd.Timestamp]]:
+def bin_events_year_node(mesh, events_df: pd.DataFrame, epsg_project: int = 5070, t_min_year: int = 1998, t_max_year: int = 2025, chunk_size: int = 50_000,
+) -> Tuple[np.ndarray, int, int, np.ndarray, Optional[pd.Timestamp], Optional[pd.Timestamp]]:
     """
     Stream-bins events into node counts[nyears, N] by:
       - find containing triangle
       - add 1/3 count to each of its 3 vertices (mass-lumped event assignment)
-
-    Returns:
-        counts_node: float64 array (nyears, N)
-        K_total_window: total events in year window
-        K_inside: events inside mesh (and in window)
-        year_labels: int32 array of calendar years per row
-        min_ts/max_ts: date range among inside-mesh events
     """
-    df = events_df.copy()
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df.dropna(subset=["date", "longitude", "latitude"]).copy()
+    if events_df is None or len(events_df) == 0:
+        ny = int(t_max_year) - int(t_min_year) + 1
+        year_labels = np.arange(int(t_min_year), int(t_max_year) + 1, dtype=np.int32)
+        return np.zeros((ny, mesh.p.shape[1]), dtype=float), 0, 0, year_labels, None, None
 
-    years = df["date"].dt.year.to_numpy(np.int32)
+    # --- Parse only what we need (avoid full df.copy()) ---
+    # Keep behavior: coercions + dropna on date/lon/lat
+    date = pd.to_datetime(events_df["date"], errors="coerce")
+    lon = pd.to_numeric(events_df["longitude"], errors="coerce")
+    lat = pd.to_numeric(events_df["latitude"], errors="coerce")
+
+    ok0 = date.notna() & lon.notna() & lat.notna()
+    if not bool(ok0.any()):
+        ny = int(t_max_year) - int(t_min_year) + 1
+        year_labels = np.arange(int(t_min_year), int(t_max_year) + 1, dtype=np.int32)
+        return np.zeros((ny, mesh.p.shape[1]), dtype=float), 0, 0, year_labels, None, None
+
+    date = date[ok0]
+    lon = lon[ok0].to_numpy(np.float64, copy=False)
+    lat = lat[ok0].to_numpy(np.float64, copy=False)
+
+    years = date.dt.year.to_numpy(np.int32, copy=False)
     mask_y = (years >= int(t_min_year)) & (years <= int(t_max_year))
-    df = df.loc[mask_y].copy()
-    dates = df["date"].to_numpy(dtype="datetime64[ns]")
-    K_total_window = int(len(df))
+    if not np.any(mask_y):
+        ny = int(t_max_year) - int(t_min_year) + 1
+        year_labels = np.arange(int(t_min_year), int(t_max_year) + 1, dtype=np.int32)
+        return np.zeros((ny, mesh.p.shape[1]), dtype=float), 0, 0, year_labels, None, None
 
-    N = mesh.p.shape[1]
+    lon = lon[mask_y]
+    lat = lat[mask_y]
+    years = years[mask_y]
+    dates = date[mask_y].to_numpy(dtype="datetime64[ns]")
+
+    K_total_window = int(lon.size)
+
+    N = int(mesh.p.shape[1])
     ny = int(int(t_max_year) - int(t_min_year) + 1)
     year_labels = np.arange(int(t_min_year), int(t_max_year) + 1, dtype=np.int32)
 
-    counts = np.zeros((ny, N), dtype=float)
+    counts = np.zeros((ny, N), dtype=np.float64)
     if K_total_window == 0:
         return counts, 0, 0, year_labels, None, None
 
-    year_id = (df["date"].dt.year.to_numpy(np.int32) - int(t_min_year)).astype(np.int64)
+    year_id = (years.astype(np.int64) - int(t_min_year)).astype(np.int64)
 
-    lon = df["longitude"].to_numpy(float)
-    lat = df["latitude"].to_numpy(float)
-    x_km, y_km = _project_lonlat_to_km(lon, lat, epsg_project=epsg_project)
+    x_km, y_km = _project_lonlat_to_km(lon, lat, epsg_project=int(epsg_project))
 
-    safe_finder = safe_element_finder(mesh, chunk_size=chunk_size)
+    px = mesh.p[0, :]
+    py = mesh.p[1, :]
+    xmin, xmax = float(px.min()), float(px.max())
+    ymin, ymax = float(py.min()), float(py.max())
+
+    boundary_poly = _get_mesh_boundary_polygon(mesh)
+    boundary_path = _boundary_poly_to_mpl_path(boundary_poly)
+
+    finder = mesh.element_finder()
     tri = mesh.t  # (3, ntri)
 
     K_inside = 0
-    min_dt = None
-    max_dt = None
+    min_dt64 = None
+    max_dt64 = None
 
-    CH = int(chunk_size)
+    CH = int(chunk_size) if (chunk_size is not None and int(chunk_size) > 0) else x_km.size
+
     for s in range(0, x_km.size, CH):
-        j = slice(s, min(x_km.size, s + CH))
+        e = min(x_km.size, s + CH)
+        xj = x_km[s:e]
+        yj = y_km[s:e]
 
-        tri_ids = safe_finder(x_km[j], y_km[j])  # -1 outside
+        # bbox prefilter
+        cand = (xj >= xmin) & (xj <= xmax) & (yj >= ymin) & (yj <= ymax)
+        if not np.any(cand):
+            continue
+
+        # boundary polygon prefilter (eliminates “inside bbox but outside mesh” cases)
+        # assumes boundary_poly is in the SAME km coords as mesh.p
+        if boundary_path is not None:
+            cand_idx = np.flatnonzero(cand)
+            pts = np.column_stack((xj[cand_idx], yj[cand_idx]))
+            inside_poly = boundary_path.contains_points(pts)
+            if not np.any(inside_poly):
+                continue
+            sel = cand_idx[inside_poly]
+        else:
+            sel = np.flatnonzero(cand)
+
+        tri_ids = finder(xj[sel], yj[sel]).astype(np.int64)
         inside = tri_ids >= 0
         if not np.any(inside):
             continue
 
-        tri_in = tri_ids[inside].astype(np.int64)
-        yid_in = year_id[j][inside].astype(np.int64)
-        dt_in = dates[j][inside]
+        tri_in = tri_ids[inside]
+        idx_in = (s + sel[inside]).astype(np.int64)
 
+        yid_in = year_id[idx_in]
         ok = (yid_in >= 0) & (yid_in < ny)
-        tri_in = tri_in[ok]
-        yid_in = yid_in[ok]
-        dt_ok = dt_in[ok]
-        if yid_in.size == 0:
+        if not np.any(ok):
             continue
 
-        v0 = tri[0, tri_in]
-        v1 = tri[1, tri_in]
-        v2 = tri[2, tri_in]
-        w = np.full(yid_in.shape[0], 1.0 / 3.0, dtype=float)
+        tri_in = tri_in[ok]
+        yid_in = yid_in[ok]
+        dt_ok = dates[idx_in][ok]
 
-        np.add.at(counts, (yid_in, v0), w)
-        np.add.at(counts, (yid_in, v1), w)
-        np.add.at(counts, (yid_in, v2), w)
+        m = int(yid_in.size)
+        if m == 0:
+            continue
 
-        K_inside += int(yid_in.size)
+        # --- vertex ids ---
+        v0 = tri[0, tri_in].astype(np.int64)
+        v1 = tri[1, tri_in].astype(np.int64)
+        v2 = tri[2, tri_in].astype(np.int64)
+
+        # --- bincount accumulation into flattened (ny*N,) ---
+        # linear indices for each vertex sample
+        base = yid_in * N
+        lin = np.empty(3 * m, dtype=np.int64)
+        lin[0:m]       = base + v0
+        lin[m:2*m]     = base + v1
+        lin[2*m:3*m]   = base + v2
+
+        w = np.full(3 * m, 1.0 / 3.0, dtype=np.float64)
+
+        acc = np.bincount(lin, weights=w, minlength=ny * N).astype(np.float64, copy=False)
+        counts += acc.reshape(ny, N)
+
+        K_inside += m
 
         dmin = dt_ok.min()
         dmax = dt_ok.max()
-        min_dt = dmin if (min_dt is None or dmin < min_dt) else min_dt
-        max_dt = dmax if (max_dt is None or dmax > max_dt) else max_dt
+        min_dt64 = dmin if (min_dt64 is None or dmin < min_dt64) else min_dt64
+        max_dt64 = dmax if (max_dt64 is None or dmax > max_dt64) else max_dt64
 
-    min_ts = pd.to_datetime(min_dt) if min_dt is not None else None
-    max_ts = pd.to_datetime(max_dt) if max_dt is not None else None
+    min_ts = pd.to_datetime(min_dt64) if min_dt64 is not None else None
+    max_ts = pd.to_datetime(max_dt64) if max_dt64 is not None else None
     return counts, K_total_window, K_inside, year_labels, min_ts, max_ts
 
 
@@ -1007,13 +1066,7 @@ def fit_bass_to_monthly_counts(y_month: np.ndarray, month_edges_years_rel: np.nd
         yhat = predict(p, q, M)
         return float(np.sum((y - yhat) ** 2))
 
-    res = minimize(
-        obj,
-        x0=np.array([p0, q0, M0], dtype=float),
-        method="L-BFGS-B",
-        bounds=[(1e-10, 10.0), (0.0, 200.0), (1e-6, 1e15)],
-        options=dict(maxiter=800),
-    )
+    res = minimize(obj, x0=np.array([p0, q0, M0], dtype=float), method="L-BFGS-B", bounds=[(1e-10, 10.0), (0.0, 200.0), (1e-6, 1e15)], options=dict(maxiter=800),)
 
     p_hat, q_hat, M_hat = float(res.x[0]), float(res.x[1]), float(res.x[2])
     yhat = predict(p_hat, q_hat, M_hat)
@@ -1446,13 +1499,8 @@ def _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol: GSBSolution, funcs: GSBF
     month_edges_years = make_month_edges_years(sol.YEAR0, start_month=start_month, end_month=end_month)
     mu_month = expected_counts_month_total(sol=sol, funcs=funcs, params=params, month_edges_years=month_edges_years, lambda_floor=lambda_floor)
 
-    p_hat, q_hat, M_hat, bass_month = fit_bass_to_monthly_counts(
-        y_month=y_month,
-        month_edges_years_rel=month_edges_years,
-        p0=float(params.get("p", 0.01)),
-        q0=float(params.get("q_I", 0.1)),
-        M0=None,
-    )
+    p_hat, q_hat, M_hat, bass_month = fit_bass_to_monthly_counts(y_month=y_month, month_edges_years_rel=month_edges_years, p0=float(params.get("p", 0.01)),
+        q0=float(params.get("q_I", 0.1)), M0=None)
 
     import matplotlib.pyplot as plt
     x = np.array(month_labels)
@@ -1614,36 +1662,27 @@ class Runner:
         events_df = events_df.loc[events_df[self.events_state_col] == st].copy()
         
         # --- cost nodes aligned to FEM snapshots (calendar-year proxy) ---
-        cal_years = (float(fem_cfg.YEAR0) + np.asarray(cache.times, float)).tolist()
+        cal_years = np.asarray(float(fem_cfg.YEAR0) + np.asarray(cache.times, float), float)
+        year_keys = np.floor(cal_years + 1e-9).astype(int)
         
-        t0 = time.perf_counter()
-        out_cost = get_batch_nodal_cost(
-            cache.mesh,
-            cal_years,
-            events_df=events_df,
-            epsg_project=fem_cfg.epsg_project,
+        uniq_years = np.unique(year_keys).astype(float).tolist()
         
-            price_col=str(self.time_params.get("price_col", "price")),
-            date_col=str(self.time_params.get("cost_date_col", "date")),
-            missing_price_value=float(self.time_params.get("missing_price_value", -1.0)),
-            trim_q=float(self.time_params.get("trim_q", 0.20)),
-            chunk_size=int(self.time_params.get("cost_chunk_size", 50_000)),
+        out_cost_year = get_batch_nodal_cost(cache.mesh, uniq_years, events_df=events_df, epsg_project=fem_cfg.epsg_project)
         
-            cpi_adjust=bool(self.time_params.get("cpi_adjust", True)),
-            base_year=int(self.time_params.get("base_year", 2025)),
-            base_month=self.time_params.get("base_month", 12),
-            cpi_cache_csv=(Path(self.time_params["cpi_cache_csv"]) if "cpi_cache_csv" in self.time_params else None),
+        # Map year->row
+        row_of_year = {int(y): i for i, y in enumerate(np.asarray(out_cost_year["years"]).astype(int))}
         
-            use_cache=True,
-            min_events_for_trim=int(self.time_params.get("min_events_for_trim", 10)),
-        )
-        cost_nodes = np.asarray(out_cost["cost_nodes"], float)
-        if cost_nodes.shape != cache.rho_total.shape:
-            raise RuntimeError(f"cost_nodes shape {cost_nodes.shape} != rho_total shape {cache.rho_total.shape}")
+        cost_nodes_year = np.asarray(out_cost_year["cost_nodes"], float)  # (nyears, N)
+        
+        # Broadcast to snapshots
+        cost_nodes = np.empty((cal_years.size, cost_nodes_year.shape[1]), dtype=float)
+        for k, yk in enumerate(year_keys):
+            cost_nodes[k] = cost_nodes_year[row_of_year[int(yk)]]
+        
         cache.cost_nodes = cost_nodes
         self.log(f"get_batch_nodal_cost complete ({time.perf_counter() - t0:.3f} s)")
-        self.log(f"[cost] mean statewide median={float(np.mean(out_cost['statewide_median'])):.4g}, "
-                 f"events used total={int(np.sum(out_cost['n_events_used'])):,}")
+        self.log(f"[cost] mean statewide median={float(np.mean(out_cost_year['statewide_median'])):.4g}, "
+                 f"events used total={int(np.sum(out_cost_year['n_events_used'])):,}")
         
         # --- solve ---
         t0 = time.perf_counter()
@@ -1660,14 +1699,8 @@ class Runner:
 
         # --- bin yearly node counts ---
         t0 = time.perf_counter()
-        counts_node, K_total, K_inside, year_labels, min_ts, max_ts = bin_events_year_node(
-            mesh=sol.mesh,
-            events_df=events_df,
-            epsg_project=fem_cfg.epsg_project,
-            t_min_year=t_min_year,
-            t_max_year=t_max_year,
-            chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
-        )
+        counts_node, K_total, K_inside, year_labels, min_ts, max_ts = bin_events_year_node(mesh=sol.mesh, events_df=events_df, epsg_project=fem_cfg.epsg_project,
+            t_min_year=t_min_year, t_max_year=t_max_year, chunk_size=int(self.time_params.get("bin_chunk_size", 5000)))
         self.log(f"bin_events_year_node complete ({time.perf_counter() - t0:.3f} s)")
         self.log(f"[bin] window events={K_total:,} inside mesh={K_inside:,} shape={counts_node.shape}")
         if min_ts is not None and max_ts is not None:
@@ -1675,13 +1708,7 @@ class Runner:
 
         # --- expected counts ---
         t0 = time.perf_counter()
-        mu_node = expected_counts_year_node(
-            sol=sol,
-            funcs=funcs,
-            params=params,
-            year_edges_years=year_edges_years,
-            lambda_floor=float(self.time_params.get("lambda_floor", 1e-30)),
-        )
+        mu_node = expected_counts_year_node(sol=sol, funcs=funcs, params=params, year_edges_years=year_edges_years, lambda_floor=float(self.time_params.get("lambda_floor", 1e-30)))
         self.log(f"expected_counts_year_node complete ({time.perf_counter() - t0:.3f} s)")
         self.log(f"[mu] total expected={float(mu_node.sum()):.6g}")
 
@@ -1802,7 +1829,7 @@ def run_parallel(
 
 if __name__ == "__main__":
     runner = Runner(
-        out_folder="ny_run6",
+        out_folder="debug_ny_run",
         mesh_params=dict(
             state_list=["NY"],
             h_km=6,
@@ -1810,14 +1837,14 @@ if __name__ == "__main__":
             epsg_project=5070,
         ),
         model_params=dict(
-            r_0=0.229142,
-            r_1=0,
-            p=3.47502e-05,
-            q_I=0.00616679,
-            gamma_J=0.000594882,
-            k_J=0.00141604,
-            D=0.0115039,
-            S0=12.795,
+            r0=4.69122,
+            r1=0.0774769,
+            p=1.19464e-05,
+            q_I=0.0389418,
+            gamma_J=0.00246011,
+            k_J=1.06086e-07,
+            D=43941.6,
+            S0=0,
         ),
         time_params=dict(
             start_year=2004.000,
@@ -1833,6 +1860,7 @@ if __name__ == "__main__":
             base_month=12,
             cpi_cache_csv="data/cache/cpi_monthly_cpiaucsl.csv"
             ),
+        
             fem_verbose=False,
             mesh_verbose=False,
     )

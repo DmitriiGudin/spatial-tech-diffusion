@@ -3,6 +3,10 @@
 configs.py
 
 Configurations for running the procedure.
+
+CAUTION: make sure to avoid mistakes in naming keys of dictionaries (mle_model_params, fem_model_params, time_params and spsa_params).
+Many functions will accept dictionaries with missing/unused keys and substitute default ones instead.
+For example, naming parameter 'r_0' instead of 'r0' may have unexpected consequences and mismatch between MLE outputs and FEM diagnostic results.
 """
 
 
@@ -14,7 +18,8 @@ default = dict(
         epsg_project=5070,
     ),
     mle_model_params=dict(
-        r=("pos", 0.15, 5),
+        r0=("pos", 0.15, 5),
+        r1=("nonneg", 0, 10),
         p=("pos", 1e-5, 1),
         q_I=("pos", 1e-5, 1),
         gamma_J=("pos", 1e-5, 1),
@@ -23,8 +28,8 @@ default = dict(
         S0=("const", 0, 0) # Old: S0=("nonneg", 0, 1000),
     ),
     fem_model_params=dict(
-        r_0=1,
-        r_1=0,
+        r0=1,
+        r1=0,
         p=0.03,
         q_I=0.5,
         gamma_J=1,
@@ -68,8 +73,8 @@ CA = dict(
         simplify_km=36, 
     ),
     fem_model_params=dict( # TO EDIT
-        r_0=0.21682372494611601,
-        r_1=0,
+        r0=0.21682372494611601,
+        r1=0,
         p=1.7966300331458806e-05,
         q_I=0.11642553092295363,
         gamma_J=0.00012305488346120747,
@@ -101,8 +106,8 @@ IL = dict(
         simplify_km=21, 
     ),
     fem_model_params=dict( # TO EDIT
-        r_0=0.21682372494611601,
-        r_1=0,
+        r0=0.21682372494611601,
+        r1=0,
         p=1.7966300331458806e-05,
         q_I=0.11642553092295363,
         gamma_J=0.00012305488346120747,
@@ -127,8 +132,8 @@ NY = dict(
         simplify_km=18, 
     ),
     fem_model_params=dict( # TO EDIT
-        r_0=0.21682372494611601,
-        r_1=0,
+        r0=0.21682372494611601,
+        r1=0,
         p=1.7966300331458806e-05,
         q_I=0.11642553092295363,
         gamma_J=0.00012305488346120747,
@@ -160,8 +165,8 @@ FL = dict(
         simplify_km=24, 
     ),
     fem_model_params=dict( # TO EDIT
-        r_0=0.21682372494611601,
-        r_1=0,
+        r0=0.21682372494611601,
+        r1=0,
         p=1.7966300331458806e-05,
         q_I=0.11642553092295363,
         gamma_J=0.00012305488346120747,

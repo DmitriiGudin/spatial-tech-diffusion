@@ -31,4 +31,8 @@ python run_mle_parallel.py --n 8 --prefix fl_my_run --config FL
 ```
 This will run 8 parallel processes each starting with random search, then multi-stage refinement of the best candidates. Once complete, the output csv-files will be saved to folders fl_my_run1, fl_my_run2, ..., fl_my_run8.
 
-*
+* Now run the final FEM-simulation on each of the 8 best parameter sets with
+```
+python run_fem_parallel.py --n 8 --prefix fl_my_run --config FL -- levels '(0,0)'
+```
+Once finished, in the same folders you will be able to view a variety of figures.

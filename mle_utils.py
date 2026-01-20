@@ -18,6 +18,7 @@ import logging
 
 from skfem import Basis, MeshTri
 logging.getLogger("skfem").setLevel(logging.ERROR)
+from scipy.special import gammaln
 
 from fem_utils import FEMConfig, GSBFunctions, solve_gsb_fem, build_fem_stage_cache, FEMStageCache
 from mesh_utils import MeshBuildConfig, build_mesh_from_admin1_region
@@ -205,6 +206,7 @@ class StagePrecompute:
     basis: Basis
 
     counts_node: np.ndarray     # (nt, N) float64  (fractional due to 1/3 split)
+    counts_logfact: np.ndarray  # (nt, N) float64  = gammaln(counts_node + 1)
 
     K_total_window: int
     K_inside: int
@@ -254,7 +256,8 @@ def precompute_stage_objects(msh_path: Path, fem_cfg: FEMConfig, events: EventDa
     counts_node = np.zeros((nt, N), dtype=float)
 
     if K_total_window == 0:
-        return StagePrecompute(fem_cache=fem_cache, mesh=mesh, basis=basis, counts_node=counts_node, K_total_window=0, K_inside=0, nt=nt, N=N)
+        counts_logfact = gammaln(counts_node + 1.0)
+        return StagePrecompute(fem_cache=fem_cache, mesh=mesh, basis=basis, counts_node=counts_node, counts_logfact = counts_logfact, K_total_window=0, K_inside=0, nt=nt, N=N)
 
     # Robust triangle IDs (-1 outside): ALWAYS chunked
     safe_finder = safe_element_finder(mesh, chunk_size=int(ll_cfg.finder_chunk_size))
@@ -266,7 +269,8 @@ def precompute_stage_objects(msh_path: Path, fem_cfg: FEMConfig, events: EventDa
     K_inside = int(t_in.size)
 
     if K_inside == 0:
-        return StagePrecompute(fem_cache=fem_cache, mesh=mesh, basis=basis, counts_node=counts_node, K_total_window=K_total_window, K_inside=0, nt=nt, N=N)
+        counts_logfact = gammaln(counts_node + 1.0)
+        return StagePrecompute(fem_cache=fem_cache, mesh=mesh, basis=basis, counts_node=counts_node, counts_logfact = counts_logfact, K_total_window=K_total_window, K_inside=0, nt=nt, N=N)
 
     # Bin times to nearest snapshot index
     tau = float(fem_cfg.tau_years)
@@ -284,8 +288,10 @@ def precompute_stage_objects(msh_path: Path, fem_cfg: FEMConfig, events: EventDa
     np.add.at(counts_node, (k_idx, v0), w)
     np.add.at(counts_node, (k_idx, v1), w)
     np.add.at(counts_node, (k_idx, v2), w)
+    
+    counts_logfact = gammaln(counts_node + 1.0)
 
-    return StagePrecompute(fem_cache=fem_cache, mesh=mesh, basis=basis, counts_node=counts_node, K_total_window=K_total_window, K_inside=K_inside, nt=nt, N=N)
+    return StagePrecompute(fem_cache=fem_cache, mesh=mesh, basis=basis, counts_node=counts_node, counts_logfact=counts_logfact, K_total_window=K_total_window, K_inside=K_inside, nt=nt, N=N)
 
 
 # =============================================================================
@@ -314,12 +320,18 @@ def loglikelihood_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dic
     if nt != stage_pre.nt:
         raise RuntimeError("StagePrecompute time grid mismatch vs FEM solve.")
 
-    counts_node = stage_pre.counts_node  # (nt, N)
-    A_nodes = np.asarray(sol.A_nodes, float)  # (N,)
+    # time step width for cell counts
+    dt = float(fem_cfg.tau_years)
 
-    # rate_total[k] = ∑_i lambda_i(t_k) A_i
-    rate_total = np.zeros(nt, dtype=float)
-    point_term = 0.0
+    # counts and precomputed log-factorials
+    counts_node = stage_pre.counts_node          # (nt, N)
+    counts_logfact = stage_pre.counts_logfact    # (nt, N)
+    A_nodes = np.asarray(sol.A_nodes, float)     # (N,)
+
+    phi = float(theta.get("phi", np.inf))
+    use_poisson = (not np.isfinite(phi))
+
+    ll_raw = 0.0
 
     for k, t in enumerate(sol.times):
         if t < ll_cfg.t_min or t > ll_cfg.t_max:
@@ -331,34 +343,64 @@ def loglikelihood_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dic
         rho_adopt_nodes = sol.rho_adopt[k]
 
         FI = funcs_template.F_I(I)
-        lam_nodes = intensity_lambda_from_fields(u=u, v=v, I=I, rho_adopt=rho_adopt_nodes, p=p, q_I=q_I, F_I_vals=FI)
-        
-        # If the model ever produces NaN/Inf, reject immediately
+        lam_nodes = intensity_lambda_from_fields(
+            u=u, v=v, I=I, rho_adopt=rho_adopt_nodes, p=p, q_I=q_I, F_I_vals=FI
+        )
+
         if not np.all(np.isfinite(lam_nodes)):
             return float("-inf")
-        
-        # Same for negative intensity
         if np.any(lam_nodes < 0.0):
             return float("-inf")
 
-        # integral over Omega via nodal control volumes
-        rate_total[k] = float(np.sum(lam_nodes * A_nodes))
+        # mean counts per (node,timecell)
+        mu_nodes = lam_nodes * A_nodes * dt
+        if not np.all(np.isfinite(mu_nodes)) or np.any(mu_nodes < 0.0):
+            return float("-inf")
 
-        # point term via nodal bins (fractional counts OK)
-        c_row = counts_node[k]
-        if np.any(c_row):
-            lam_safe = np.maximum(lam_nodes, ll_cfg.lambda_floor)
-            point_term += float(np.sum(c_row * np.log(lam_safe)))
+        c = counts_node[k]
+        logfact = counts_logfact[k]
 
-    # time integral over window
-    times = sol.times
-    mask_time = (times >= ll_cfg.t_min) & (times <= ll_cfg.t_max)
-    t_win = times[mask_time]
-    r_win = rate_total[mask_time]
-    integral_term = float(np.trapezoid(r_win, t_win)) if t_win.size >= 2 else 0.0
+        if use_poisson:
+            # Poisson cell-count loglik: sum_i [ c_i log(mu_i) - mu_i - log(c_i!) ]
+            mu_safe = np.maximum(mu_nodes, ll_cfg.lambda_floor)
 
-    ll_raw = float(point_term - integral_term)
-    # reject non-finite likelihoods
+            # c*log(mu) only matters where c>0
+            mask = c > 0
+            term = -float(np.sum(mu_nodes)) - float(np.sum(logfact))
+            if np.any(mask):
+                term += float(np.sum(c[mask] * np.log(mu_safe[mask])))
+
+            ll_raw += term
+
+        else:
+            if not (phi > 0.0 and np.isfinite(phi)):
+                return float("-inf")
+
+            # NB (Poisson–Gamma) with mean mu and shape phi:
+            # log P(c) = gammaln(c+phi) - gammaln(phi) - gammaln(c+1)
+            #            + phi*log(phi/(phi+mu)) + c*log(mu/(phi+mu))
+            mu_safe = np.maximum(mu_nodes, ll_cfg.lambda_floor)
+            denom = mu_safe + phi
+
+            # terms over all nodes
+            term = (
+                float(np.sum(phi * (np.log(phi) - np.log(denom))))
+                - float(np.sum(logfact))
+                - float(A_nodes.size * gammaln(phi))
+            )
+
+            # only where c>0 do we need gammaln(c+phi) and c*log(mu/(phi+mu))
+            mask = c > 0
+            if np.any(mask):
+                term += float(np.sum(gammaln(c[mask] + phi)))
+                term += float(np.sum(c[mask] * (np.log(mu_safe[mask]) - np.log(denom[mask]))))
+            else:
+                # if c==0 everywhere, gammaln(c+phi)=gammaln(phi) cancels with -gammaln(phi),
+                # so nothing to add
+                pass
+
+            ll_raw += term
+
     if not np.isfinite(ll_raw):
         return float("-inf")
 
@@ -369,12 +411,13 @@ def loglikelihood_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dic
         ll = ll_raw
 
     if ll_cfg.verbose:
+        kind = "Poisson" if use_poisson else f"NegBin(phi={phi:.6g})"
         print(
-            f"[ll] Kwin={stage_pre.K_total_window} K_in={stage_pre.K_inside} "
-            f"point={point_term:.3e} integral={integral_term:.3e} ll={ll_raw:.3e} ll_per_ev={ll:.6g}"
+            f"[ll:{kind}] Kwin={stage_pre.K_total_window} K_in={stage_pre.K_inside} "
+            f"ll={ll_raw:.3e} ll_per_ev={ll:.6g}"
         )
 
-    return ll
+    return float(ll)
 
 
 # =============================================================================
@@ -418,13 +461,19 @@ class ParamSpec:
         self.lo = float(self.lo)
         self.hi = float(self.hi)
         self.scale = float(self.scale)
+    
         if self.kind not in ("const", "pos", "nonneg"):
             raise ValueError(f"ParamSpec.kind must be one of const/pos/nonneg, got {self.kind}")
         if self.hi < self.lo:
             raise ValueError(f"{self.name}: hi < lo ({self.hi} < {self.lo})")
+    
         if self.kind == "const":
-            # enforce exact const behavior
             self.hi = self.lo
+            return
+    
+        # for optimizable params, require finite bounds
+        if not (np.isfinite(self.lo) and np.isfinite(self.hi)):
+            raise ValueError(f"{self.name}: non-const bounds must be finite, got lo={self.lo}, hi={self.hi}")
 
 def _free_specs(specs: List[ParamSpec]) -> List[ParamSpec]:
     return [s for s in specs if s.kind != "const"]
@@ -534,7 +583,7 @@ class FitResult:
     history: List[Tuple[int, float, Dict[str, float]]]
 
 def _fmt_theta_compact(th: Dict[str, float]) -> str:
-    keys = ["r0", "r1", "p", "q_I", "gamma_J", "k_J", "D", "S0"]
+    keys = ["r0", "r1", "p", "q_I", "gamma_J", "k_J", "D", "S0", "phi"]
     return " ".join([f"{k}={th[k]:.6g}" for k in keys if k in th])
 
 def run_spsa_stage(
@@ -1115,6 +1164,7 @@ if __name__ == "__main__":
             k_J=("nonneg", 0, 1),
             D=("pos", 1, 1e5),
             S0=("const", 0, 0),
+            phi=("pos", 1e-3, 1e4),
         ),
         time_params=dict(
             start_year=2003.375,

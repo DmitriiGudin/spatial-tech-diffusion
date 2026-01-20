@@ -1827,6 +1827,17 @@ def run_parallel(
 # Example for New York: create runner, build mesh, run FEM, produce diagnostics
 # =============================================================================
 
+'''model_params=dict(
+            r0=4.69122,
+            r1=0.0774769,
+            p=1.19464e-05,
+            q_I=0.0389418,
+            gamma_J=0.00246011,
+            k_J=1.06086e-07,
+            D=43941.6,
+            S0=0,
+),'''
+
 if __name__ == "__main__":
     runner = Runner(
         out_folder="example_ny_run",
@@ -1837,13 +1848,13 @@ if __name__ == "__main__":
             epsg_project=5070,
         ),
         model_params=dict(
-            r0=4.69122,
-            r1=0.0774769,
-            p=1.19464e-05,
-            q_I=0.0389418,
-            gamma_J=0.00246011,
-            k_J=1.06086e-07,
-            D=43941.6,
+            r0=1.9352,
+            r1=5.3645e-05,
+            p=4.59321e-05,
+            q_I=0.109587,
+            gamma_J=1.30008e-05,
+            k_J=1.15548e-05,
+            D=63938.4,
             S0=0,
         ),
         time_params=dict(

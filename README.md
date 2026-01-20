@@ -21,6 +21,8 @@ We will use Florida here as an example.
 ```
 python run_mesh_diag.py --h_km 8 --simplify_km 24 --states CA
 ```
-Typically *simplify_km* of 3 x $h_km$ works well. The numbers to look out for are the number of triangles (a few thousand tends to give a very close approximation to the true PDE solution) and the number of obtuse triangles (ideally no more than a few, otherwise serious local numerical errors are possible).
-2. Make any necessary changes in *configs.py*. The default parameters were used in the dissertation.
-3. 
+Typically *simplify_km* of 3 x *h_km* works well. The numbers to look out for are the number of triangles (a few thousand tends to give a very close approximation to the true PDE solution) and the number of obtuse triangles (ideally no more than a few, otherwise serious local numerical errors are possible).
+
+1. Make any necessary changes in *configs.py*. The default parameters were used in the dissertation.
+
+1. 

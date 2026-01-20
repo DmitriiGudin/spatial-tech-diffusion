@@ -5,8 +5,22 @@ Python 3.12
 
 # Installation
 
-1. Download the file at https://bit.ly/trackingthesun2025 and unzip the large csv-file to data/raw/pv/. It should be named "TTS_LBNL_public_file_29-Sep-2025_all.csv", otherwise rename it to this.
+1. Download the file at https://bit.ly/trackingthesun2025 and unzip the large csv-file to *data/raw/pv/*. It should be named *TTS_LBNL_public_file_29-Sep-2025_all.csv*, otherwise rename it to this.
 
-2. Run python raw_to_processed_solar_all.py
+2. Run
+```
+python raw_to_processed_solar_all.py
+```
 
-Ready!
+
+# Usage
+
+We will use Florida here as an example.
+
+1.  *(Optional)* Before modeling the market, we need to choose the state to explore and approximate its geometry with a mesh. You can play around with mesh parameters *h_km* (mesh size) and *simplify_km* (boundary simplification size) and explore figures and diagnostics:
+```
+python run_mesh_diag.py --h_km 8 --simplify_km 24 --states CA
+```
+Typically *simplify_km* of 3 x $h_km$ works well. The numbers to look out for are the number of triangles (a few thousand tends to give a very close approximation to the true PDE solution) and the number of obtuse triangles (ideally no more than a few, otherwise serious local numerical errors are possible).
+2. Make any necessary changes in *configs.py*. The default parameters were used in the dissertation.
+3. 

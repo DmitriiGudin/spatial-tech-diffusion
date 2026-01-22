@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple, Sequence, List, Any
 
+import matplotlib.pyplot as plt
+
 import numpy as np
 import pandas as pd
 import math
@@ -686,7 +688,7 @@ def make_year_edges_years(YEAR0: float, start_year: int, end_year: int) -> np.nd
 
 
 # =============================================================================
-# Data binning to NODES
+# Data binning to nodes
 # =============================================================================
 
 @lru_cache(maxsize=16)
@@ -1028,7 +1030,7 @@ def pearson_residuals(y: np.ndarray, mu: np.ndarray, mu_floor: float = 1e-12) ->
 
 
 # =============================================================================
-# Bass model: total counts (unchanged)
+# Bass model: total counts
 # =============================================================================
 
 def bass_F(t: np.ndarray, p: float, q: float) -> np.ndarray:
@@ -1074,7 +1076,7 @@ def fit_bass_to_monthly_counts(y_month: np.ndarray, month_edges_years_rel: np.nd
 
 
 # =============================================================================
-# Plot helpers (unchanged code, but allow Runner logging via wrapper)
+# Plot helpers
 # =============================================================================
 
 def _plot_cities_lonlat(
@@ -1272,6 +1274,42 @@ def _plot_pearson_residuals_year_nodes_lonlat(
 
     _plot_node_circles_lonlat_single(msh_path=msh_path, epsg_project=epsg_project, out_png=out_png, values=R_plot,
         title=f"Pearson residuals (signed log1p), {year}", h_km=h_km, cities=cities, vlim=float(vlim_log), cbar_label="sign(R) · log(1 + |R|)")
+    
+    
+def sample_monthly_counts_nb(mu_month: np.ndarray, phi: float, rng: np.random.Generator) -> np.ndarray:
+    """
+    Sample Y_m ~ NB(mean=mu_m, dispersion=phi) independently across months.
+
+    Parameterization:
+      E[Y] = mu
+      Var[Y] = mu + mu^2 / phi
+      phi -> inf gives Poisson(mu)
+
+    Uses NumPy's negative_binomial(n, p) with:
+      n = phi
+      p = phi / (phi + mu)
+    """
+    mu = np.asarray(mu_month, dtype=float)
+    mu = np.maximum(mu, 0.0)
+
+    if not np.isfinite(phi) or phi <= 0.0:
+        # Poisson limit or invalid -> treat as Poisson
+        return rng.poisson(mu).astype(int)
+
+    # Convert mean->(n,p). Ensure p in (0,1].
+    n = float(phi)
+    p = n / (n + mu)  # vector
+    p = np.clip(p, 1e-15, 1.0)
+
+    # NumPy requires integer n? It actually accepts floats in many builds,
+    # but to be safe/portable: if phi is not integer, use Gamma-Poisson mixture:
+    if abs(n - round(n)) > 1e-9:
+        # Lambda ~ Gamma(shape=phi, scale=mu/phi); Y ~ Poisson(Lambda)
+        lam = rng.gamma(shape=n, scale=(mu / n))
+        return rng.poisson(lam).astype(int)
+
+    # Integer-shape NB path
+    return rng.negative_binomial(n=int(round(n)), p=p).astype(int)
     
     
 def _nice_vmax_1digit(M: float) -> float:
@@ -1491,24 +1529,27 @@ def _plot_uvIJ_and_w_year_lonlat(msh_path: Path, epsg_project: int, out_png_uvij
     plt.close(figw)
 
 
-def _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol: GSBSolution, funcs: GSBFunctions, params: Dict[str, float], events_df: pd.DataFrame,
-    epsg_project: int, out_png: Path, start_month: str, end_month: str, chunk_size: int = 2000, lambda_floor: float = 1e-30):
-    y_month, month_labels, K_total, K_inside = bin_events_month_total_inside_mesh(mesh=sol.mesh, events_df=events_df, epsg_project=epsg_project,
-        start_month=start_month, end_month=end_month, chunk_size=chunk_size)
+def _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol: GSBSolution, funcs: GSBFunctions, params: Dict[str, float], events_df: pd.DataFrame, epsg_project: int,
+    out_png: Path, start_month: str, end_month: str, chunk_size: int = 2000, lambda_floor: float = 1e-30, n_stochastic: int = 5, stochastic_seed: int = 0):
+    # --- data + mean prediction ---
+    y_month, month_labels, K_total, K_inside = bin_events_month_total_inside_mesh(
+        mesh=sol.mesh, events_df=events_df, epsg_project=epsg_project,
+        start_month=start_month, end_month=end_month, chunk_size=chunk_size
+    )
 
     month_edges_years = make_month_edges_years(sol.YEAR0, start_month=start_month, end_month=end_month)
     mu_month = expected_counts_month_total(sol=sol, funcs=funcs, params=params, month_edges_years=month_edges_years, lambda_floor=lambda_floor)
 
-    p_hat, q_hat, M_hat, bass_month = fit_bass_to_monthly_counts(y_month=y_month, month_edges_years_rel=month_edges_years, p0=float(params.get("p", 0.01)),
-        q0=float(params.get("q_I", 0.1)), M0=None)
+    # --- Bass fit ---
+    p_hat, q_hat, M_hat, bass_month = fit_bass_to_monthly_counts(y_month=y_month, month_edges_years_rel=month_edges_years, p0=float(params.get("p", 0.01)), q0=float(params.get("q_I", 0.1)), M0=None)
 
-    import matplotlib.pyplot as plt
     x = np.array(month_labels)
 
+    # --- main plot: Data vs Bass vs mean GSB ---
     fig, ax = plt.subplots(figsize=(13, 6))
     ax.plot(x, y_month.astype(float), label="Data (inside mesh)")
     ax.plot(x, bass_month.astype(float), label=f"Bass fit (p={p_hat:.3g}, q={q_hat:.3g})")
-    ax.plot(x, mu_month.astype(float), label="GSB model (integrated λ over nodes)")
+    ax.plot(x, mu_month.astype(float), label="GSB mean (integrated λ)")
 
     ax.set_title(f"Total monthly counts: Data vs Bass vs GSB ({start_month} to {end_month})")
     ax.set_xlabel("Month")
@@ -1520,6 +1561,35 @@ def _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol: GSBSolution, funcs: GSBF
     fig.tight_layout()
     fig.savefig(out_png, dpi=200)
     plt.close(fig)
+
+    # --- stochastic plots: Data vs sampled NB(GSB) ---
+    phi = float(params.get("phi", float("inf")))
+    rng = np.random.default_rng(int(stochastic_seed))
+
+    # base name: ny_monthly_totals_bass_vs_gsb_vs_data.png -> ny_monthly_totals_stochastic_gsb_vs_data_1.png
+    base = out_png.name.replace("_monthly_totals_bass_vs_gsb_vs_data", "_monthly_totals_stochastic_gsb_vs_data")
+    if base == out_png.name:
+        # fallback if filename doesn't match expected pattern
+        stem = out_png.stem
+        base = f"{stem}_stochastic_gsb_vs_data"
+
+    for j in range(1, int(n_stochastic) + 1):
+        y_sim = sample_monthly_counts_nb(mu_month=mu_month, phi=phi, rng=rng)
+
+        fig, ax = plt.subplots(figsize=(13, 6))
+        ax.plot(x, y_month.astype(float), label="Data (inside mesh)")
+        ax.plot(x, y_sim.astype(float), label=f"GSB sampled (NB, phi={phi:.3g})")
+
+        ax.set_title(f"Total monthly counts (stochastic): Data vs sampled GSB ({start_month} to {end_month})")
+        ax.set_xlabel("Month")
+        ax.set_ylabel("Count per month")
+        ax.grid(True, alpha=0.25)
+        ax.legend()
+
+        out_j = out_png.parent / base.replace(".png", f"_{j}.png")
+        fig.tight_layout()
+        fig.savefig(out_j, dpi=200)
+        plt.close(fig)
 
 
 # =============================================================================

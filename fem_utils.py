@@ -1661,9 +1661,16 @@ class Runner:
     def build_params(self) -> Dict[str, float]:
         r0 = float(self.model_params.get("r0", self.model_params.get("r", 1.0)))
         r1 = float(self.model_params.get("r1", 0.0))
-        # Keep only the solver-needed parameters here.
-        return dict(r0=r0, r1=r1, p=float(self.model_params.get("p", 0.01)), q_I=float(self.model_params.get("q_I", 0.1)),
-            k_J=float(self.model_params.get("k_J", 0.0)), D=float(self.model_params.get("D", 0.0)), gamma_J=float(self.model_params.get("gamma_J", 0.0)), S0=float(self.model_params.get("S0", 0.0)),
+        phi = float(self.model_params.get("phi", float("inf")))
+        return dict(
+            r0=r0, r1=r1,
+            p=float(self.model_params.get("p", 0.01)),
+            q_I=float(self.model_params.get("q_I", 0.1)),
+            k_J=float(self.model_params.get("k_J", 0.0)),
+            D=float(self.model_params.get("D", 0.0)),
+            gamma_J=float(self.model_params.get("gamma_J", 0.0)),
+            S0=float(self.model_params.get("S0", 0.0)),
+            phi=phi,
         )
 
     # ---- part 1: mesh building ----
@@ -1897,17 +1904,6 @@ def run_parallel(
 # Example for New York: create runner, build mesh, run FEM, produce diagnostics
 # =============================================================================
 
-'''model_params=dict(
-            r0=4.69122,
-            r1=0.0774769,
-            p=1.19464e-05,
-            q_I=0.0389418,
-            gamma_J=0.00246011,
-            k_J=1.06086e-07,
-            D=43941.6,
-            S0=0,
-),'''
-
 if __name__ == "__main__":
     runner = Runner(
         out_folder="example_ny_run",
@@ -1926,6 +1922,7 @@ if __name__ == "__main__":
             k_J=1.15548e-05,
             D=63938.4,
             S0=0,
+            phi=1
         ),
         time_params=dict(
             start_year=2004.000,

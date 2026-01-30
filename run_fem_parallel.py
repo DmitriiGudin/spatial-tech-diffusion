@@ -194,7 +194,7 @@ def load_model_params_from_csv(csv_path: Path, row: int) -> Dict[str, float]:
     s = df.iloc[int(row)]
 
     # Standard parameter names (as used by fem_utils.Runner.build_params / build_functions)
-    keys = ["r0", "r1", "p", "q_I", "gamma_J", "k_J", "D", "S0", "phi"]
+    keys = ["r0", "r1", "r2", "p", "q_I", "gamma_J", "k_J", "D", "S0", "phi"]
 
     missing = [k for k in keys if k not in df.columns]
     if missing:

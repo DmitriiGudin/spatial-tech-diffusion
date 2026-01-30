@@ -81,11 +81,6 @@ def date_to_decimal_year(ts: pd.Timestamp) -> float:
     frac = (ts - start).days / float(days)
     return float(y) + float(frac)
 
-
-# =============================================================================
-# Progress helper (per-process safe; prints can interleave across processes)
-# =============================================================================
-
 # =============================================================================
 # Progress helper (per-process safe; prints can interleave across processes)
 # =============================================================================
@@ -106,6 +101,83 @@ class ProgressTracker:
         if (self.count % self.freq) == 0 or self.count >= self.total:
             c = min(self.count, self.total)
             self.printer(f"{c} / {self.total} iterations complete")
+            
+            
+# =============================================================================
+# Google Trends helpers
+# =============================================================================
+            
+def decimal_year_to_timestamp(y: float) -> pd.Timestamp:
+    """
+    Convert decimal year (e.g. 2012.25) to a Timestamp by mapping the fractional
+    part to day-of-year. This matches your date_to_decimal_year convention.
+    """
+    y = float(y)
+    year = int(np.floor(y))
+    frac = y - year
+    start = pd.Timestamp(year=year, month=1, day=1)
+    end = pd.Timestamp(year=year + 1, month=1, day=1)
+    days = (end - start).days
+    day_offset = int(np.floor(frac * days))
+    return start + pd.Timedelta(days=day_offset)
+
+
+def load_google_trends_monthly(csv_path: Path) -> pd.Series:
+    """
+    Returns monthly series indexed by month-start Timestamp, values in [0,1].
+    CSV columns: Time (yyyy-mm-dd month starts), Solar energy (0..100).
+    """
+    df = pd.read_csv(csv_path)
+    if "Time" not in df.columns or "Solar energy" not in df.columns:
+        raise ValueError("Google Trends CSV must have columns: 'Time' and 'Solar energy'.")
+
+    ts = pd.to_datetime(df["Time"], errors="coerce")
+    vals = pd.to_numeric(df["Solar energy"], errors="coerce") / 100.0
+
+    ok = ts.notna() & vals.notna()
+    ts = ts[ok]
+    vals = vals[ok].clip(lower=0.0, upper=1.0)
+
+    # ensure month-start index
+    ts = ts.dt.to_period("M").dt.to_timestamp(how="start")
+
+    s = pd.Series(vals.to_numpy(dtype=float), index=ts.to_numpy())
+    s = s.sort_index()
+    s = s[~s.index.duplicated(keep="last")]
+    return s
+
+
+def trend_factor_at_snapshots(trends: pd.Series, cal_years: np.ndarray) -> np.ndarray:
+    """
+    trends: monthly Series indexed by month-start
+    cal_years: calendar years (float) at snapshots, e.g. YEAR0 + times[k]
+    Returns trend_factor[k] in [0,1], clamped outside trends range.
+    """
+    if trends.empty:
+        raise ValueError("Google Trends series is empty.")
+
+    out = np.empty(cal_years.shape[0], dtype=float)
+
+    # (optional) ensure full monthly grid + fill, but clamp outside anyway
+    monthly_index = pd.date_range(trends.index.min(), trends.index.max(), freq="MS")
+    trends_filled = trends.reindex(monthly_index).ffill().bfill()
+
+    lo = trends_filled.index.min()
+    hi = trends_filled.index.max()
+
+    for k, y in enumerate(cal_years):
+        ts = decimal_year_to_timestamp(float(y))
+        ms = ts.to_period("M").to_timestamp(how="start")
+
+        if ms < lo:
+            out[k] = float(trends_filled.iloc[0])
+        elif ms > hi:
+            out[k] = float(trends_filled.iloc[-1])
+        else:
+            out[k] = float(trends_filled.loc[ms])
+
+    return out
+
 
 # =============================================================================
 # Data loading
@@ -122,14 +194,8 @@ class EventData:
     raw: pd.DataFrame
 
 
-def load_events_csv(
-    csv_path: Path,
-    region_states: Optional[Iterable[str]] = None,
-    YEAR0: float = 1998.0,
-    epsg_project: int = 5070,
-    min_year: Optional[float] = None,
-    max_year: Optional[float] = None,
-) -> EventData:
+def load_events_csv(csv_path: Path, region_states: Optional[Iterable[str]] = None, YEAR0: float = 1998.0,
+    epsg_project: int = 5070, min_year: Optional[float] = None, max_year: Optional[float] = None) -> EventData:
     df = pd.read_csv(csv_path)
 
     if "date" not in df.columns:
@@ -160,15 +226,7 @@ def load_events_csv(
     cal_year = df["cal_year"].to_numpy(float)
     t_years = cal_year - float(YEAR0)
 
-    return EventData(
-        x_km=x_km,
-        y_km=y_km,
-        t_years=t_years,
-        cal_year=cal_year,
-        lon=lon,
-        lat=lat,
-        raw=df,
-    )
+    return EventData(x_km=x_km, y_km=y_km, t_years=t_years, cal_year=cal_year, lon=lon, lat=lat, raw=df)
 
 
 # =============================================================================
@@ -234,11 +292,24 @@ def precompute_stage_objects(msh_path: Path, fem_cfg: FEMConfig, events: EventDa
         
     cost_nodes = np.asarray(cost_out["cost_nodes"], dtype=float)
     if cost_nodes.shape != fem_cache.rho_total.shape:
-        raise ValueError(
-            f"cost_nodes shape {cost_nodes.shape} must match rho_total shape {fem_cache.rho_total.shape}."
-        )
+        raise ValueError(f"cost_nodes shape {cost_nodes.shape} must match rho_total shape {fem_cache.rho_total.shape}.")
 
     fem_cache.cost_nodes = cost_nodes
+
+    # --- Google Trends: uniform trend_factor(t), broadcast to nodes ---
+    trends_csv = Path("data/raw/pv/GoogleTrends_US_20031231-1900_20260127-1054.csv")
+    trends = load_google_trends_monthly(trends_csv)
+
+    cal_years_snap = float(fem_cfg.YEAR0) + fem_cache.times  # (nt,)
+    trend_t = trend_factor_at_snapshots(trends, cal_years_snap)  # (nt,)
+
+    # broadcast to nodal shape (nt, N); spatially uniform
+    trend_nodes = np.broadcast_to(trend_t[:, None], fem_cache.rho_total.shape).astype(float, copy=False)
+
+    fem_cache.trend_nodes = trend_nodes
+    
+    if fem_cache.trend_nodes.shape != fem_cache.rho_total.shape:
+        raise ValueError("trend_nodes must match rho_total shape.")
 
     mesh = fem_cache.mesh
     basis = fem_cache.basis
@@ -583,7 +654,7 @@ class FitResult:
     history: List[Tuple[int, float, Dict[str, float]]]
 
 def _fmt_theta_compact(th: Dict[str, float]) -> str:
-    keys = ["r0", "r1", "p", "q_I", "gamma_J", "k_J", "D", "S0", "phi"]
+    keys = ["r0", "r1", "r2", "p", "q_I", "gamma_J", "k_J", "D", "S0", "phi"]
     return " ".join([f"{k}={th[k]:.6g}" for k in keys if k in th])
 
 def run_spsa_stage(
@@ -1158,6 +1229,7 @@ if __name__ == "__main__":
         model_params=dict(
             r0=("pos", 0.15, 5),
             r1=("nonneg", 0, 10),
+            r2=("nonneg", 0, 10),
             p=("pos", 1e-5, 1),
             q_I=("pos", 1e-5, 1),
             gamma_J=("pos", 1e-5, 10),

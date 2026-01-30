@@ -231,6 +231,7 @@ class FEMStageCache:
     rho_total: np.ndarray       # (nt,N) persons/km^2
     A_nodes: np.ndarray         # (N,) km^2 nodal control areas (mass-lumped)
     cost_nodes: Optional[np.ndarray] = None   # (nt,N) or None
+    trend_factor: Optional[np.ndarray] = None # (nt,)   or None
 
     def check_compatible(self, cfg: FEMConfig) -> None:
         if float(cfg.tau_years) != float(self.cfg.tau_years):
@@ -358,6 +359,7 @@ def solve_gsb_fem(msh_path: Path, funcs: GSBFunctions, params: Dict[str, float],
     # --- params ---
     r0 = float(params.get("r0", params.get("r", 1)))
     r1 = float(params.get("r1", 0))
+    r2 = float(params.get("r2", 0))
     p = float(params.get("p", 0.01))
     qI = float(params.get("q_I", 0.1))
     kJ = float(params.get("k_J", 0))
@@ -425,12 +427,22 @@ def solve_gsb_fem(msh_path: Path, funcs: GSBFunctions, params: Dict[str, float],
             c_nodes = np.asarray(cost_nodes_pre[m], float)
         else:
             c_nodes = None
+            
+        # Google Trends factor at this snapshot (if available)
+        trend_factor_pre = None
+        if cache is not None:
+            trend_factor_pre = getattr(cache, "trend_factor", None)
         
-        # r(x,t) = max(0, r0 - r1*c(x,t))
+        # trend factor at this step (scalar)
+        tf = 0
+        if trend_factor_pre is not None:
+            tf = float(trend_factor_pre[m])
+        
+        # r(x,t) = max(0, r0 - r1*c(x,t) + r2*tf)
         if c_nodes is None:
-            r_nodes = np.full_like(rho_total, r0, dtype=float)
+            r_nodes = np.full_like(rho_total, r0 + r2 * tf, dtype=float)
         else:
-            r_nodes = np.maximum(0.0, r0 - r1 * c_nodes)
+            r_nodes = np.maximum(0.0, r0 - r1 * c_nodes + r2 * tf)
             
         R_nodes_hist.append(r_nodes.copy())
         if c_nodes is None:
@@ -459,9 +471,7 @@ def solve_gsb_fem(msh_path: Path, funcs: GSBFunctions, params: Dict[str, float],
             I_new = I + tau * funcs.G(J_eff)
 
             FI_new = funcs.F_I(I_new)
-            u_new, v_new = _solve_u_v_backward_euler_closed_form_from_FI(
-                u_prev=u, v_prev=v, p=p, qI=qI, FI_curr=FI_new, tau=tau
-            )
+            u_new, v_new = _solve_u_v_backward_euler_closed_form_from_FI(u_prev=u, v_prev=v, p=p, qI=qI, FI_curr=FI_new, tau=tau)
 
             du_dt = (u_new - u) / tau
             dv_dt = (v_new - v) / tau
@@ -653,6 +663,87 @@ def intensity_lambda_nodes(sol: GSBSolution, funcs: GSBFunctions, params: Dict[s
     lam = rho * (p + qI * FI_I) * s
 
     return np.maximum(lam, float(lambda_floor))
+
+
+# =============================================================================
+# Google Trends helpers
+# =============================================================================
+
+def load_google_trends_monthly(csv_path: Path) -> pd.Series:
+    """
+    Reads Google Trends CSV with columns: 'Time' and 'Solar energy'.
+    Returns a Series indexed by month-start Timestamp (freq='MS') with values in [0,1].
+    """
+    df = pd.read_csv(csv_path)
+    if "Time" not in df.columns or "Solar energy" not in df.columns:
+        raise ValueError("Google Trends CSV must have columns: 'Time' and 'Solar energy'.")
+
+    ts = pd.to_datetime(df["Time"], errors="coerce")
+    vals = pd.to_numeric(df["Solar energy"], errors="coerce") / 100.0
+
+    ok = ts.notna() & vals.notna()
+    ts = ts[ok]
+    vals = vals[ok].clip(lower=0.0, upper=1.0)
+
+    # Ensure month-start alignment
+    ts = ts.dt.to_period("M").dt.to_timestamp(how="start")
+
+    s = pd.Series(vals.to_numpy(dtype=float), index=ts.to_numpy())
+    s = s.sort_index()
+    # If duplicate months exist, keep the last (rare but safe)
+    s = s[~s.index.duplicated(keep="last")]
+    return s
+
+
+def _frac_year_to_timestamp(year_frac: float) -> pd.Timestamp:
+    """
+    Convert a float year (e.g. 2012.25) to an approximate Timestamp using day-of-year.
+    Assumes linear mapping within the year.
+    """
+    y = int(np.floor(year_frac))
+    start = pd.Timestamp(year=y, month=1, day=1)
+    end = pd.Timestamp(year=y + 1, month=1, day=1)
+    days = (end - start).days
+    frac = float(year_frac - y)
+    # clamp for numerical safety
+    frac = min(max(frac, 0.0), 1.0 - 1e-12)
+    d = int(np.floor(frac * days))
+    return start + pd.Timedelta(days=d)
+
+
+def trend_factor_at_snapshots(times: np.ndarray, YEAR0: float, trends: pd.Series) -> np.ndarray:
+    """
+    Map solver snapshot times (in years since YEAR0) to monthly trend_factor values.
+
+    Strategy:
+      - convert snapshot -> Timestamp
+      - map to month-start Timestamp (MS)
+      - lookup trends; if missing, forward-fill/back-fill using reindex+ffill+bfill.
+    """
+    if trends is None or len(trends) == 0:
+        return np.zeros_like(times, dtype=float)
+
+    # Build a filled monthly series over its own range (ffill/bfill)
+    monthly_index = pd.date_range(trends.index.min(), trends.index.max(), freq="MS")
+    trends_filled = trends.reindex(monthly_index).ffill().bfill()
+
+    out = np.zeros(times.shape[0], dtype=float)
+    for k, t in enumerate(times):
+        cal_year = float(YEAR0) + float(t)
+        ts = _frac_year_to_timestamp(cal_year)
+        ms = ts.to_period("M").to_timestamp(how="start")
+
+        if ms < trends_filled.index.min():
+            out[k] = float(trends_filled.iloc[0])
+        elif ms > trends_filled.index.max():
+            out[k] = float(trends_filled.iloc[-1])
+        else:
+            out[k] = float(trends_filled.loc[ms])
+
+    # final clamp
+    out = np.clip(out, 0.0, 1.0)
+    return out
+
 
 
 # =============================================================================
@@ -1612,6 +1703,7 @@ class Runner:
     month_window: Tuple[str, str] = ("1998-01", "2023-12")
     events_csv: Path = Path("data") / "processed" / "solar_installations_all.csv"
     events_state_col: str = "state"
+    google_trends_csv: Path = Path("data") / "raw" / "pv" / "GoogleTrends_US_20031231-1900_20260127-1054.csv"
 
     base_out: Path = Path("out")
 
@@ -1660,10 +1752,11 @@ class Runner:
 
     def build_params(self) -> Dict[str, float]:
         r0 = float(self.model_params.get("r0", self.model_params.get("r", 1.0)))
-        r1 = float(self.model_params.get("r1", 0.0))
+        r1 = float(self.model_params.get("r1", 0))
+        r2 = float(self.model_params.get("r2", 0))
         phi = float(self.model_params.get("phi", float("inf")))
         return dict(
-            r0=r0, r1=r1,
+            r0=r0, r1=r1, r2=r2,
             p=float(self.model_params.get("p", 0.01)),
             q_I=float(self.model_params.get("q_I", 0.1)),
             k_J=float(self.model_params.get("k_J", 0.0)),
@@ -1723,6 +1816,13 @@ class Runner:
         t0 = time.perf_counter()
         cache = build_fem_stage_cache(msh, fem_cfg, log=lambda s: self.log(s))
         self.log(f"build_fem_stage_cache complete ({time.perf_counter() - t0:.3f} s)")
+        
+        # --- Google Trends (monthly) -> snapshot-aligned trend_factor ---
+        trends = load_google_trends_monthly(self.google_trends_csv)
+        trend_factor_snap = trend_factor_at_snapshots(cache.times, fem_cfg.YEAR0, trends)
+        cache.trend_factor = trend_factor_snap
+        self.log(f"[trends] loaded {len(trends):,} months; snapshot trend_factor in "
+                 f"[{trend_factor_snap.min():.3f}, {trend_factor_snap.max():.3f}]")
 
         # --- events load + filter ---
         events_df = pd.read_csv(self.events_csv)
@@ -1914,15 +2014,16 @@ if __name__ == "__main__":
             epsg_project=5070,
         ),
         model_params=dict(
-            r0=1.9352,
-            r1=5.3645e-05,
-            p=4.59321e-05,
-            q_I=0.109587,
-            gamma_J=1.30008e-05,
-            k_J=1.15548e-05,
-            D=63938.4,
+            r0=0,
+            r1=0,
+            r2=12,
+            p=2.8246923787608614e-05,
+            q_I=0.00010655100396753071,
+            gamma_J=0.5016912434719386,
+            k_J=8.523579597526038e-06,
+            D=0.002581663740503833,
             S0=0,
-            phi=1
+            phi=1.4248710106361648
         ),
         time_params=dict(
             start_year=2004.000,

@@ -10,6 +10,10 @@ For example, naming parameter 'r_0' instead of 'r0' may have unexpected conseque
 """
 
 
+"""
+Default configuration
+"""
+
 default = dict(
     mesh_params=dict(
         state_list=['CA'],
@@ -67,6 +71,10 @@ default = dict(
     cities={},
 )
 
+
+"""
+Custom configurations start here
+"""
 
 CA = dict(
     mesh_params=dict(
@@ -144,8 +152,8 @@ NY = dict(
         S0=12.82367787707364,
     ),
     time_params=dict(
-        start_year=2004,
-        T_years=20,
+        start_year=2004,#2008,
+        T_years=20,#16,
         t_min_year=2002,
         t_max_year=2024,
     ),
@@ -177,8 +185,8 @@ FL = dict(
         S0=12.82367787707364,
     ),
     time_params=dict(
-        start_year=2006,
-        T_years=18,
+        start_year=2014,#2006,
+        T_years=10,#18,
         t_min_year=2002,
         t_max_year=2024,
     ),

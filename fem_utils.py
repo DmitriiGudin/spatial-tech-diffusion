@@ -118,8 +118,8 @@ class ConstS:
 @dataclass(frozen=True)
 class SaturatingFI:
     def __call__(self, I: np.ndarray) -> np.ndarray:
-        I = np.asarray(I, float)
-        return I / np.maximum(1.0 + I, 1e-15)
+        np.asarray(I, float)
+        return np.maximum(1 + I, 1e-15)
 
 
 @dataclass(frozen=True)
@@ -152,13 +152,7 @@ class ConstMuPrime:
 
 def make_default_gsb_functions(model_params: Dict[str, float]) -> GSBFunctions:
     """
-    Creates pickle-friendly default GSBFunctions consistent with your example:
-      S(x,t) = S0
-      F_I(I) = I/(1+I)
-      G(J)   = gamma_J * J
-      F_J(J) = k_J * J
-      F_J'   = k_J (constant)
-      mu'    = D   (constant)
+    Creates pickle-friendly default GSBFunctions.
     """
     S0 = float(model_params.get("S0", 0.0))
     gamma_J = float(model_params.get("gamma_J", 0.0))
@@ -270,9 +264,7 @@ def build_fem_stage_cache(msh_path: Path, cfg: FEMConfig, log: Optional[Callable
     if cost_nodes is not None:
         cost_nodes = np.asarray(cost_nodes, float)
         if cost_nodes.shape != rho_total.shape:
-            raise ValueError(
-                f"cost_nodes shape {cost_nodes.shape} must match rho_total shape {rho_total.shape}."
-            )
+            raise ValueError(f"cost_nodes shape {cost_nodes.shape} must match rho_total shape {rho_total.shape}.")
 
     return FEMStageCache(msh_path=msh_path, cfg=cfg, mesh=mesh, basis=basis, N=N, times=times, M=M, K=K, lon_nodes=lon_nodes, 
         lat_nodes=lat_nodes, xy_nodes_km=xy_nodes_km, rho_total=rho_total, A_nodes=A_nodes, cost_nodes=cost_nodes)

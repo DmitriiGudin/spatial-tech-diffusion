@@ -835,16 +835,9 @@ def sample_theta_from_ranges(
     return out
 
 
-def random_search_candidates(
-    stage: StageConfig,
-    funcs_template: GSBFunctions,
-    specs: List[ParamSpec],
-    stage_pre: StagePrecompute,
-    ll_cfg: LikelihoodConfig,
-    rs_cfg: RandomSearchConfig,
-    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
-    progress: Optional[Callable[[int], None]] = None,   # <-- add
-) -> List[Tuple[float, Dict[str, float]]]:
+def random_search_candidates(stage: StageConfig, funcs_template: GSBFunctions, specs: List[ParamSpec], stage_pre: StagePrecompute,
+    ll_cfg: LikelihoodConfig, rs_cfg: RandomSearchConfig, sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
+    progress: Optional[Callable[[int], None]] = None) -> List[Tuple[float, Dict[str, float]]]:
     """
     Returns list sorted by descending ll: [(ll, theta), ...]
     """
@@ -1019,8 +1012,7 @@ class Runner:
         # inputs (defaults match your current layout)
         self.events_csv = Path(events_csv) if events_csv is not None else (self.base_data_dir / "processed" / "solar_installations_all.csv")
         self.admin1_shp = Path(admin1_shp) if admin1_shp is not None else (
-            self.base_data_dir / "raw" / "maps" / "ne_10m_admin_1_states_provinces_lakes" / "ne_10m_admin_1_states_provinces_lakes.shp"
-        )
+            self.base_data_dir / "raw" / "maps" / "ne_10m_admin_1_states_provinces_lakes" / "ne_10m_admin_1_states_provinces_lakes.shp")
 
         # event filters
         self.events_min_year = events_min_year
@@ -1098,7 +1090,7 @@ class Runner:
         print(f"{self.out_folder}@[{self._elapsed_hms()}] ---- {msg}")
 
     # -------------------------
-    # Model: build funcs + sync_boxes (same as your main)
+    # Model: build funcs + sync_boxes
     # -------------------------
     def _build_funcs_template(self) -> Tuple[GSBFunctions, Callable[[Dict[str, float]], None]]:
         S0_box = {"S0": 0.0}
@@ -1174,16 +1166,9 @@ class Runner:
             fem_cfg = FEMConfig(tau_years=tau, T_years=ll_cfg.t_max, picard_max_iter=self.picard_max_iter, picard_tol=self.picard_tol,
                 verbose=self.fem_verbose, YEAR0=YEAR0, epsg_project=self.epsg_project)
 
-            opt_cfg = SPSAConfig(
-                n_iter=int(self.spsa_params["n_iter"]),
-                a=float(self.spsa_params["a"]),
-                c=float(self.spsa_params["c"]),
-                gamma=float(self.spsa_params["gamma"]),
-                seed=int(self.spsa_params["seed"]),
-                print_every=int(self.spsa_params.get("print_every", 1)),
-                grad_clip=float(self.spsa_params["grad_clip"]),
-                step_clip=float(self.spsa_params["step_clip"]),
-            )
+            opt_cfg = SPSAConfig(n_iter=int(self.spsa_params["n_iter"]), a=float(self.spsa_params["a"]), c=float(self.spsa_params["c"]),
+                gamma=float(self.spsa_params["gamma"]), seed=int(self.spsa_params["seed"]), print_every=int(self.spsa_params.get("print_every", 1)),
+                grad_clip=float(self.spsa_params["grad_clip"]), step_clip=float(self.spsa_params["step_clip"]))
 
             stage = StageConfig(mesh_cfg=MeshBuildConfig(h_km=float(self.mesh_params["h_km"]), simplify_km=float(self.mesh_params["simplify_km"]), epsg_project=self.epsg_project),
                 fem_cfg=fem_cfg, opt_cfg=opt_cfg, msh_path=self.msh_path)

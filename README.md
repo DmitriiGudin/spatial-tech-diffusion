@@ -19,7 +19,7 @@ We will use Florida here as an example.
 
 *  *(Optional)* Before modeling the market, we need to choose the state to explore and approximate its geometry with a mesh. You can play around with mesh parameters *h_km* (mesh size) and *simplify_km* (boundary simplification size) and explore figures and diagnostics:
 ```
-python run_mesh_diag.py --h_km 8 --simplify_km 24 --states CA
+python run_mesh_diag.py --h_km 8 --simplify_km 24 --states FL
 ```
 Typically *simplify_km* of 3 x *h_km* works well. The numbers to look out for are the number of triangles (a few thousand tends to give a very close approximation to the true PDE solution) and the number of obtuse triangles (ideally no more than a few, otherwise serious local numerical errors are possible).
 

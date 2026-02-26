@@ -20,9 +20,11 @@ from skfem import Basis, MeshTri
 logging.getLogger("skfem").setLevel(logging.ERROR)
 from scipy.special import gammaln
 
-from fem_utils import FEMConfig, GSBFunctions, solve_gsb_fem, build_fem_stage_cache, FEMStageCache
+from fem_utils import FEMConfig, solve_gsb_fem, build_fem_stage_cache, FEMStageCache
 from mesh_utils import MeshBuildConfig, build_mesh_from_admin1_region
 from density_utils import _project_lonlat_to_km, get_batch_nodal_cost
+from model_utils import ModelConfig, GSBFunctions
+from model_configs import SSB_CURRENT
 
 
 # =============================================================================
@@ -302,14 +304,11 @@ def precompute_stage_objects(msh_path: Path, fem_cfg: FEMConfig, events: EventDa
 
     cal_years_snap = float(fem_cfg.YEAR0) + fem_cache.times  # (nt,)
     trend_t = trend_factor_at_snapshots(trends, cal_years_snap)  # (nt,)
-
-    # broadcast to nodal shape (nt, N); spatially uniform
-    trend_nodes = np.broadcast_to(trend_t[:, None], fem_cache.rho_total.shape).astype(float, copy=False)
-
-    fem_cache.trend_nodes = trend_nodes
     
-    if fem_cache.trend_nodes.shape != fem_cache.rho_total.shape:
-        raise ValueError("trend_nodes must match rho_total shape.")
+    fem_cache.trend_factor = np.asarray(trend_t, float)
+    
+    if fem_cache.trend_factor.shape != fem_cache.times.shape:
+        raise ValueError("trend_factor must have shape (nt,) matching fem_cache.times.")
 
     mesh = fem_cache.mesh
     basis = fem_cache.basis
@@ -370,7 +369,8 @@ def precompute_stage_objects(msh_path: Path, fem_cfg: FEMConfig, events: EventDa
 # =============================================================================
 
 def loglikelihood_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dict[str, float], fem_cfg: FEMConfig,
-    stage_pre: StagePrecompute, ll_cfg: LikelihoodConfig, sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,) -> float:
+    stage_pre: StagePrecompute, ll_cfg: LikelihoodConfig, sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
+    *, model_cfg: ModelConfig = SSB_CURRENT) -> float:
     """
     Poisson log-likelihood for theta on a nodal discretization.
 
@@ -382,10 +382,11 @@ def loglikelihood_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dic
     if sync_boxes is not None:
         sync_boxes(theta)
 
-    sol = solve_gsb_fem(msh_path, funcs_template, theta, fem_cfg, cache=stage_pre.fem_cache)
-
-    p = float(theta["p"])
-    q_I = float(theta["q_I"])
+    sol = solve_gsb_fem(msh_path, funcs_template, theta, fem_cfg, cache=stage_pre.fem_cache, model_cfg=model_cfg)
+    
+    core = model_cfg.get_core_params(theta)
+    p = float(core["p"])
+    q_I = float(core["q_I"])
 
     nt = sol.times.size
     if nt != stage_pre.nt:
@@ -414,9 +415,7 @@ def loglikelihood_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dic
         rho_adopt_nodes = sol.rho_adopt[k]
 
         FI = funcs_template.F_I(I)
-        lam_nodes = intensity_lambda_from_fields(
-            u=u, v=v, I=I, rho_adopt=rho_adopt_nodes, p=p, q_I=q_I, F_I_vals=FI
-        )
+        lam_nodes = intensity_lambda_from_fields(u=u, v=v, I=I, rho_adopt=rho_adopt_nodes, p=p, q_I=q_I, F_I_vals=FI)
 
         if not np.all(np.isfinite(lam_nodes)):
             return float("-inf")
@@ -454,11 +453,7 @@ def loglikelihood_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dic
             denom = mu_safe + phi
 
             # terms over all nodes
-            term = (
-                float(np.sum(phi * (np.log(phi) - np.log(denom))))
-                - float(np.sum(logfact))
-                - float(A_nodes.size * gammaln(phi))
-            )
+            term = (float(np.sum(phi * (np.log(phi) - np.log(denom)))) - float(np.sum(logfact)) - float(A_nodes.size * gammaln(phi)))
 
             # only where c>0 do we need gammaln(c+phi) and c*log(mu/(phi+mu))
             mask = c > 0
@@ -646,6 +641,7 @@ class StageConfig:
     fem_cfg: FEMConfig
     opt_cfg: SPSAConfig
     msh_path: Path
+    model_cfg: ModelConfig = SSB_CURRENT
 
 @dataclass
 class FitResult:
@@ -653,20 +649,57 @@ class FitResult:
     ll_best: float
     history: List[Tuple[int, float, Dict[str, float]]]
 
-def _fmt_theta_compact(th: Dict[str, float]) -> str:
-    keys = ["r0", "r1", "r2", "p", "q_I", "gamma_J", "k_J", "D", "S0", "phi"]
-    return " ".join([f"{k}={th[k]:.6g}" for k in keys if k in th])
+def _fmt_theta_compact(th: Dict[str, float], specs: Optional[List["ParamSpec"]] = None, *, max_items: int = 14, prefer_first: Tuple[str, ...] = ("p", "q_I", "phi"), include_const: bool = False) -> str:
+    """
+    Compact diagnostic string for theta.
 
-def run_spsa_stage(
-    stage: StageConfig,
-    funcs_template: GSBFunctions,
-    z0: np.ndarray,
-    specs: List[ParamSpec],
-    stage_pre: StagePrecompute,
-    ll_cfg: LikelihoodConfig,
-    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
-    progress: Optional[Callable[[int], None]] = None,   # <-- add
-) -> Tuple[np.ndarray, FitResult]:
+    If specs is provided, we use its order (and can skip const params).
+    Otherwise we fall back to sorted(th.keys()).
+
+    prefer_first: names to show first if present (in that order).
+    max_items: cap total number of displayed parameters (rest shown as +N more).
+    """
+    # choose key order
+    if specs is not None:
+        keys = []
+        for s in specs:
+            if (not include_const) and (s.kind == "const"):
+                continue
+            keys.append(s.name)
+    else:
+        keys = sorted(th.keys())
+
+    # move preferred keys to front
+    front: List[str] = []
+    used = set()
+    for k in prefer_first:
+        if k in th and k in keys:
+            front.append(k); used.add(k)
+
+    tail = [k for k in keys if (k in th) and (k not in used)]
+    ordered = front + tail
+
+    # limit items
+    shown = ordered[:max_items]
+    parts = []
+    for k in shown:
+        v = th.get(k, None)
+        if v is None:
+            continue
+        try:
+            parts.append(f"{k}={float(v):.6g}")
+        except Exception:
+            parts.append(f"{k}={v}")
+
+    n_more = max(0, len(ordered) - len(shown))
+    if n_more > 0:
+        parts.append(f"+{n_more} more")
+
+    return " ".join(parts)
+
+def run_spsa_stage(stage: StageConfig, funcs_template: GSBFunctions, z0: np.ndarray, specs: List[ParamSpec], stage_pre: StagePrecompute, 
+    ll_cfg: LikelihoodConfig, sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, progress: Optional[Callable[[int], None]] = None) -> Tuple[np.ndarray, FitResult]:
+    
     rng = np.random.default_rng(stage.opt_cfg.seed)
     z = z0.copy()
 
@@ -675,10 +708,10 @@ def run_spsa_stage(
     history: List[Tuple[int, float, Dict[str, float]]] = []
 
     th0 = unpack_z_to_theta(z, specs)
-    ll0 = loglikelihood_theta(stage.msh_path, funcs_template, th0, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes)
+    ll0 = loglikelihood_theta(stage.msh_path, funcs_template, th0, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
     best_ll, best_theta = ll0, th0
     if stage.opt_cfg.print_every > 0:
-        print(f"[SPSA] iter 0/{stage.opt_cfg.n_iter} ll={ll0:.6e} best={best_ll:.6e} {_fmt_theta_compact(th0)}")
+        print(f"[SPSA] iter 0/{stage.opt_cfg.n_iter} ll={ll0:.6e} best={best_ll:.6e} {_fmt_theta_compact(th0, specs)}")
 
     for k in range(1, stage.opt_cfg.n_iter + 1):
         ak = stage.opt_cfg.a / ((k + 10.0) ** stage.opt_cfg.alpha)
@@ -692,8 +725,8 @@ def run_spsa_stage(
         th_plus = unpack_z_to_theta(z_plus, specs)
         th_minus = unpack_z_to_theta(z_minus, specs)
 
-        ll_plus = loglikelihood_theta(stage.msh_path, funcs_template, th_plus, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes)
-        ll_minus = loglikelihood_theta(stage.msh_path, funcs_template, th_minus, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes)
+        ll_plus = loglikelihood_theta(stage.msh_path, funcs_template, th_plus, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
+        ll_minus = loglikelihood_theta(stage.msh_path, funcs_template, th_minus, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
 
         ghat = (ll_plus - ll_minus) / (2.0 * ck) * delta
         ghat = np.clip(ghat, -stage.opt_cfg.grad_clip, stage.opt_cfg.grad_clip)
@@ -703,7 +736,7 @@ def run_spsa_stage(
         z = z + dz
 
         th = unpack_z_to_theta(z, specs)
-        ll = loglikelihood_theta(stage.msh_path, funcs_template, th, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes)
+        ll = loglikelihood_theta(stage.msh_path, funcs_template, th, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
 
         if np.isfinite(ll) and ll > best_ll:
             best_ll = ll
@@ -715,7 +748,7 @@ def run_spsa_stage(
             progress(1)
 
         if stage.opt_cfg.print_every > 0 and (k % stage.opt_cfg.print_every == 0):
-            print(f"[SPSA] iter {k}/{stage.opt_cfg.n_iter} ll={ll:.6e} best={best_ll:.6e} {_fmt_theta_compact(th)}")
+            print(f"[SPSA] iter {k}/{stage.opt_cfg.n_iter} ll={ll:.6e} best={best_ll:.6e} {_fmt_theta_compact(th, specs)}")
 
     return z, FitResult(theta_best=best_theta, ll_best=best_ll, history=history)
 
@@ -783,11 +816,7 @@ def _uniform(rng: np.random.Generator, low: float, high: float) -> float:
     return float(rng.uniform(float(low), float(high)))
 
 
-def sample_theta_from_ranges(
-    rng: np.random.Generator,
-    specs: List[ParamSpec],
-    theta_ranges: Optional[Dict[str, Tuple[float, float]]] = None,
-) -> Dict[str, float]:
+def sample_theta_from_ranges(rng: np.random.Generator, specs: List[ParamSpec], theta_ranges: Optional[Dict[str, Tuple[float, float]]] = None) -> Dict[str, float]:
     """
     Sample theta within bounds.
     If theta_ranges is provided, it overrides spec bounds per-parameter.
@@ -849,7 +878,7 @@ def random_search_candidates(stage: StageConfig, funcs_template: GSBFunctions, s
 
     for i in range(n_eval):
         th = sample_theta_from_ranges(rng, specs, theta_ranges)
-        ll = loglikelihood_theta(stage.msh_path, funcs_template, th, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes)
+        ll = loglikelihood_theta(stage.msh_path, funcs_template, th, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
         if np.isfinite(ll):
             scored.append((float(ll), th))
             
@@ -894,7 +923,7 @@ def multi_start_refine(stage: StageConfig, funcs_template: GSBFunctions, specs: 
             opt_cfg.n_iter = int(n_iter)
             opt_cfg.seed = int(rs_cfg.seed + 10_000 * si + j)
 
-            stage_local = StageConfig(mesh_cfg=stage.mesh_cfg, fem_cfg=stage.fem_cfg, opt_cfg=opt_cfg, msh_path=stage.msh_path)
+            stage_local = StageConfig(mesh_cfg=stage.mesh_cfg, fem_cfg=stage.fem_cfg, opt_cfg=opt_cfg, msh_path=stage.msh_path, model_cfg=stage.model_cfg)
 
             z0 = pack_theta_to_z(th_seed, specs)
             z_best, res = run_spsa_stage(stage_local, funcs_template, z0, specs, stage_pre, ll_cfg, sync_boxes=sync_boxes, progress=progress)
@@ -903,7 +932,7 @@ def multi_start_refine(stage: StageConfig, funcs_template: GSBFunctions, specs: 
         refined.sort(key=lambda x: x[0], reverse=True)
         cur = refined
 
-        print(f"[MS] Stage {si} done. best_ll={cur[0][0]:.6e} theta={_fmt_theta_compact(cur[0][1])}")
+        print(f"[MS] Stage {si} done. best_ll={cur[0][0]:.6e} theta={_fmt_theta_compact(cur[0][1], specs)}")
 
         # Save refined list to CSV
         if rs_cfg.save_dir is not None:
@@ -918,7 +947,7 @@ def multi_start_refine(stage: StageConfig, funcs_template: GSBFunctions, specs: 
     opt_cfg.n_iter = int(rs_cfg.final_n_iter)
     opt_cfg.seed = int(rs_cfg.seed + 999_999)
 
-    stage_final = StageConfig(mesh_cfg=stage.mesh_cfg, fem_cfg=stage.fem_cfg, opt_cfg=opt_cfg, msh_path=stage.msh_path)
+    stage_final = StageConfig(mesh_cfg=stage.mesh_cfg, fem_cfg=stage.fem_cfg, opt_cfg=opt_cfg, msh_path=stage.msh_path, model_cfg=stage.model_cfg)
 
     z0 = pack_theta_to_z(best_th, specs)
     z_best, res_best = run_spsa_stage(stage_final, funcs_template, z0, specs, stage_pre, ll_cfg, sync_boxes=sync_boxes, progress=progress)
@@ -975,6 +1004,7 @@ class Runner:
         *,
         mesh_params: Dict,
         model_params: Dict[str, Tuple[str, float, float]],
+        model_cfg: ModelConfig = SSB_CURRENT,
         time_params: Dict,
         spsa_params: Dict,
         randomSearch_params: Dict,
@@ -1001,6 +1031,7 @@ class Runner:
 
         self.mesh_params = dict(mesh_params)
         self.model_params = dict(model_params)
+        self.model_cfg = model_cfg
         self.time_params = dict(time_params)
         self.spsa_params = dict(spsa_params)
         self.randomSearch_params = dict(randomSearch_params)
@@ -1093,40 +1124,9 @@ class Runner:
     # Model: build funcs + sync_boxes
     # -------------------------
     def _build_funcs_template(self) -> Tuple[GSBFunctions, Callable[[Dict[str, float]], None]]:
-        S0_box = {"S0": 0.0}
-        gamma_box = {"gamma_J": 1.0}
-        kJ_box = {"k_J": 0.0}
-        D_box = {"D": 0.0}
-
-        def S_const(xy_km: np.ndarray, t_years: float) -> np.ndarray:
-            return np.full(xy_km.shape[0], float(S0_box["S0"]), dtype=float)
-
-        def F_I(I: np.ndarray) -> np.ndarray:
-            I = np.asarray(I, float)
-            return I / np.maximum(1.0 + I, 1e-15)
-
-        def G(J: np.ndarray) -> np.ndarray:
-            return float(gamma_box["gamma_J"]) * np.asarray(J, float)
-
-        def F_J(J: np.ndarray) -> np.ndarray:
-            return float(kJ_box["k_J"]) * np.asarray(J, float)
-
-        def F_J_prime(J: np.ndarray) -> np.ndarray:
-            return np.full_like(np.asarray(J, float), float(kJ_box["k_J"]), dtype=float)
-
-        def mu_prime(J: np.ndarray) -> np.ndarray:
-            return np.full_like(np.asarray(J, float), float(D_box["D"]), dtype=float)
-
-        funcs = GSBFunctions(S=S_const, F_I=F_I, G=G, F_J=F_J, F_J_prime=F_J_prime, mu_prime=mu_prime)
-
-        def sync_boxes(theta: Dict[str, float]) -> None:
-            # only update what the funcs read
-            S0_box["S0"] = float(theta["S0"])
-            gamma_box["gamma_J"] = float(theta["gamma_J"])
-            kJ_box["k_J"] = float(theta["k_J"])
-            D_box["D"] = float(theta["D"])
-
-        return funcs, sync_boxes
+        if self.model_cfg.build_mle_template is None:
+            raise RuntimeError("Model config does not provide an MLE template builder.")
+        return self.model_cfg.build_mle_template()
 
     # -------------------------
     # Specs from model_params
@@ -1171,7 +1171,7 @@ class Runner:
                 grad_clip=float(self.spsa_params["grad_clip"]), step_clip=float(self.spsa_params["step_clip"]))
 
             stage = StageConfig(mesh_cfg=MeshBuildConfig(h_km=float(self.mesh_params["h_km"]), simplify_km=float(self.mesh_params["simplify_km"]), epsg_project=self.epsg_project),
-                fem_cfg=fem_cfg, opt_cfg=opt_cfg, msh_path=self.msh_path)
+                fem_cfg=fem_cfg, opt_cfg=opt_cfg, msh_path=self.msh_path, model_cfg=self.model_cfg)
 
             stage_pre = precompute_stage_objects(stage.msh_path, stage.fem_cfg, events, ll_cfg)
 
@@ -1204,8 +1204,7 @@ class Runner:
 
 if __name__ == "__main__":
     runner = Runner(
-        #out_folder="example_ny_run",
-        out_folder="debug_run",
+        out_folder="example_ny_run",
         mesh_params=dict(
             state_list=["NY"],
             h_km=6,
@@ -1250,4 +1249,5 @@ if __name__ == "__main__":
     runner.build_mesh()
     res = runner.run_MLE()
     print("[DONE] best ll:", res.ll_best)
-    print("[DONE] best theta:", _fmt_theta_compact(res.theta_best))
+    specs = runner._build_specs()
+    print("[DONE] best theta:", _fmt_theta_compact(res.theta_best, specs))

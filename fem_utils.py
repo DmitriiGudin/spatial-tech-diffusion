@@ -50,6 +50,8 @@ from skfem.models.poisson import laplace
 logging.getLogger("skfem").setLevel(logging.ERROR)
 
 from density_utils import get_batch_nodal_density, get_batch_nodal_cost, _get_mesh_boundary_polygon, _boundary_poly_to_mpl_path
+from model_utils import ModelConfig, GSBFunctions
+from model_configs import SSB_CURRENT
 
 
 # =============================================================================
@@ -82,15 +84,6 @@ def laplace_coeff(u, v, w):
 # Model definition / configuration
 # =============================================================================
 
-@dataclass
-class GSBFunctions:
-    S: Callable[[np.ndarray, float], np.ndarray]
-    F_I: Callable[[np.ndarray], np.ndarray]
-    G: Callable[[np.ndarray], np.ndarray]
-    F_J: Callable[[np.ndarray], np.ndarray]
-    F_J_prime: Optional[Callable[[np.ndarray], np.ndarray]] = None
-    mu_prime: Optional[Callable[[np.ndarray], np.ndarray]] = None
-
 
 @dataclass
 class FEMConfig:
@@ -102,71 +95,6 @@ class FEMConfig:
 
     YEAR0: float = 1998.0
     epsg_project: int = 5070
-
-
-# =============================================================================
-# Pickle-friendly model building blocks (for parallel runs)
-# =============================================================================
-
-@dataclass(frozen=True)
-class ConstS:
-    S0: float
-    def __call__(self, xy_km: np.ndarray, t_years: float) -> np.ndarray:
-        return np.full(xy_km.shape[0], float(self.S0), dtype=float)
-
-
-@dataclass(frozen=True)
-class SaturatingFI:
-    def __call__(self, I: np.ndarray) -> np.ndarray:
-        np.asarray(I, float)
-        return np.maximum(1 + I, 1e-15)
-
-
-@dataclass(frozen=True)
-class LinearG:
-    gamma_J: float
-    def __call__(self, J: np.ndarray) -> np.ndarray:
-        return float(self.gamma_J) * np.asarray(J, float)
-
-
-@dataclass(frozen=True)
-class LinearFJ:
-    k_J: float
-    def __call__(self, J: np.ndarray) -> np.ndarray:
-        return float(self.k_J) * np.asarray(J, float)
-
-
-@dataclass(frozen=True)
-class ConstFJPrime:
-    k_J: float
-    def __call__(self, J: np.ndarray) -> np.ndarray:
-        return np.full_like(np.asarray(J, float), float(self.k_J), dtype=float)
-
-
-@dataclass(frozen=True)
-class ConstMuPrime:
-    D: float
-    def __call__(self, J: np.ndarray) -> np.ndarray:
-        return np.full_like(np.asarray(J, float), float(self.D), dtype=float)
-
-
-def make_default_gsb_functions(model_params: Dict[str, float]) -> GSBFunctions:
-    """
-    Creates pickle-friendly default GSBFunctions.
-    """
-    S0 = float(model_params.get("S0", 0.0))
-    gamma_J = float(model_params.get("gamma_J", 0.0))
-    k_J = float(model_params.get("k_J", 0.0))
-    D = float(model_params.get("D", 0.0))
-
-    return GSBFunctions(
-        S=ConstS(S0=S0),
-        F_I=SaturatingFI(),
-        G=LinearG(gamma_J=gamma_J),
-        F_J=LinearFJ(k_J=k_J),
-        F_J_prime=ConstFJPrime(k_J=k_J),
-        mu_prime=ConstMuPrime(D=D),
-    )
 
 
 # =============================================================================
@@ -274,10 +202,7 @@ def build_fem_stage_cache(msh_path: Path, cfg: FEMConfig, log: Optional[Callable
 # Solver core
 # =============================================================================
 
-def _solve_u_v_backward_euler_closed_form_from_FI(
-    u_prev: np.ndarray, v_prev: np.ndarray,
-    p: float, qI: float, FI_curr: np.ndarray, tau: float
-) -> Tuple[np.ndarray, np.ndarray]:
+def _solve_u_v_backward_euler_closed_form_from_FI(u_prev: np.ndarray, v_prev: np.ndarray, p: float, qI: float, FI_curr: np.ndarray, tau: float) -> Tuple[np.ndarray, np.ndarray]:
     A = tau * float(p)
 
     FI = np.asarray(FI_curr, float)
@@ -306,7 +231,7 @@ def _is_constant_vector(x: np.ndarray, atol: float = 0.0) -> bool:
 
 
 def solve_gsb_fem(msh_path: Path, funcs: GSBFunctions, params: Dict[str, float], cfg: FEMConfig, cache: Optional[FEMStageCache] = None, log: Optional[Callable[[str], None]] = None,
-) -> "GSBSolution":
+model_cfg: ModelConfig = SSB_CURRENT) -> "GSBSolution":
     # --- use cache if provided, else build minimal local objects (slower) ---
     if cache is None:
         mesh = load_mesh_km_from_msh(msh_path)
@@ -348,19 +273,19 @@ def solve_gsb_fem(msh_path: Path, funcs: GSBFunctions, params: Dict[str, float],
         rho_total_pre = cache.rho_total  # (nt,N)
         cost_nodes_pre = getattr(cache, "cost_nodes", None)  # (nt,N) or None
 
+
     # --- params ---
     r0 = float(params.get("r0", params.get("r", 1)))
     r1 = float(params.get("r1", 0))
     r2 = float(params.get("r2", 0))
-    p = float(params.get("p", 0.01))
-    qI = float(params.get("q_I", 0.1))
-    kJ = float(params.get("k_J", 0))
-    D = float(params.get("D", 0))
-
-    if funcs.mu_prime is None:
-        funcs.mu_prime = ConstMuPrime(D=D)
-    if funcs.F_J_prime is None:
-        funcs.F_J_prime = ConstFJPrime(k_J=kJ)
+    
+    core = model_cfg.get_core_params(params)
+    p = float(core["p"])
+    qI = float(core["q_I"])
+    
+    # funcs must be complete; if not, fail loudly (so you don't silently fit the wrong model)
+    if funcs.mu_prime is None or funcs.F_J_prime is None:
+        raise ValueError(f"Model functions incomplete: mu_prime and F_J_prime must be provided by model_cfg={model_cfg.name}.")
 
     u = np.zeros(N, dtype=float)
     v = np.zeros(N, dtype=float)
@@ -1685,6 +1610,8 @@ class Runner:
     mesh_params: Dict[str, Any]
     model_params: Dict[str, float]
     time_params: Dict[str, float]
+    
+    model_cfg: ModelConfig = SSB_CURRENT
 
     fem_verbose: bool = False
     mesh_verbose: bool = False
@@ -1740,23 +1667,19 @@ class Runner:
             picard_tol=float(self.time_params.get("picard_tol", 1e-8)), verbose=bool(self.fem_verbose), YEAR0=float(start_year), epsg_project=epsg)
 
     def build_functions(self) -> GSBFunctions:
-        return make_default_gsb_functions(self.model_params)
+        return self.model_cfg.make_funcs(self.model_params)
 
     def build_params(self) -> Dict[str, float]:
         r0 = float(self.model_params.get("r0", self.model_params.get("r", 1.0)))
-        r1 = float(self.model_params.get("r1", 0))
-        r2 = float(self.model_params.get("r2", 0))
+        r1 = float(self.model_params.get("r1", 0.0))
+        r2 = float(self.model_params.get("r2", 0.0))
         phi = float(self.model_params.get("phi", float("inf")))
-        return dict(
-            r0=r0, r1=r1, r2=r2,
-            p=float(self.model_params.get("p", 0.01)),
-            q_I=float(self.model_params.get("q_I", 0.1)),
-            k_J=float(self.model_params.get("k_J", 0.0)),
-            D=float(self.model_params.get("D", 0.0)),
-            gamma_J=float(self.model_params.get("gamma_J", 0.0)),
-            S0=float(self.model_params.get("S0", 0.0)),
-            phi=phi,
-        )
+    
+        core = self.model_cfg.get_core_params(self.model_params)
+        p = float(core["p"])
+        q_I = float(core["q_I"])
+    
+        return dict(r0=r0, r1=r1, r2=r2, p=p, q_I=q_I, phi=phi)
 
     # ---- part 1: mesh building ----
     def build_mesh(self) -> Path:
@@ -1855,7 +1778,7 @@ class Runner:
         
         # --- solve ---
         t0 = time.perf_counter()
-        sol = solve_gsb_fem(msh, funcs, params, fem_cfg, cache=cache, log=lambda s: self.log(s))
+        sol = solve_gsb_fem(msh, funcs, params, fem_cfg, cache=cache, log=lambda s: self.log(s), model_cfg=self.model_cfg)
         self.log(f"solve_gsb_fem complete ({time.perf_counter() - t0:.3f} s)")
 
         # --- year window ---
@@ -2006,16 +1929,16 @@ if __name__ == "__main__":
             epsg_project=5070,
         ),
         model_params=dict(
-            r0=0,
-            r1=0,
-            r2=12,
-            p=2.8246923787608614e-05,
-            q_I=0.00010655100396753071,
-            gamma_J=0.5016912434719386,
-            k_J=8.523579597526038e-06,
-            D=0.002581663740503833,
+            r0=0.023431325190960844,
+            r1=0.04940116054941341,
+            r2=0.028638503662553427,
+            p=0.00011557169559153849,
+            q_I=0.054698742335255374,
+            gamma_J=1.9225252064154095,
+            k_J=4.106195524757044e-05,
+            D=4256.858961837641,
             S0=0,
-            phi=1.4248710106361648
+            phi=1.4628175438247957
         ),
         time_params=dict(
             start_year=2004.000,

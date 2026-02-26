@@ -49,6 +49,7 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from fem_utils import Runner
+from model_configs import SSB_CURRENT
 
 
 # -----------------------------
@@ -176,14 +177,13 @@ def choose_param_csv(csv_dir: Path, out_folder: str, order: int) -> Path:
     return stages[-1 - k][1]
 
 
-def load_model_params_from_csv(csv_path: Path, row: int) -> Dict[str, float]:
+def load_model_params_from_csv(csv_path: Path, row: int, *, model_cfg=SSB_CURRENT, always_params: Tuple[str, ...] = ("r0", "r1", "r2", "phi")) -> Dict[str, float]:
     """
-    Load a row of parameters from a CSV.
+    Load a row of parameters from a CSV and require an EXACT match with:
+        expected = model_cfg.core_param_names + model_cfg.param_names + always_params
 
-    Required columns are whatever your FEM Runner expects in model_params.
-    We’ll pull the standard set if present.
-
-    If your MLE CSV uses different column names, adjust `keys`.
+    - CSV is allowed to contain 'll' (ignored).
+    - Any missing OR extra parameter column (after allowing always_params) triggers an error.
     """
     df = pd.read_csv(csv_path)
     if df.shape[0] == 0:
@@ -191,20 +191,27 @@ def load_model_params_from_csv(csv_path: Path, row: int) -> Dict[str, float]:
     if row < 0 or row >= df.shape[0]:
         raise ValueError(f"Row {row} out of range for {csv_path.name}: nrows={df.shape[0]}")
 
+    expected = (list(getattr(model_cfg, "core_param_names", ("p", "q_I"))) + list(getattr(model_cfg, "param_names", ())) + list(always_params))
+    expected_set = set(expected)
+
+    # Columns present (ignore 'll' only)
+    present_set = set(str(c) for c in df.columns if str(c) != "ll")
+
+    missing = sorted(expected_set - present_set)
+    extra = sorted(present_set - expected_set)
+
+    if missing or extra:
+        raise ValueError("CSV/model parameter mismatch.\n"
+            f"  Model: {getattr(model_cfg, 'name', 'UNKNOWN')}\n"
+            f"  CSV:   {csv_path.name}\n"
+            f"  Missing columns: {missing}\n"
+            f"  Extra columns:   {extra}\n"
+            f"  Allowed global params: {list(always_params)}\n"
+            "Fix: use CSVs produced by the same model, or switch SSB_CURRENT to match.")
+
     s = df.iloc[int(row)]
-
-    # Standard parameter names (as used by fem_utils.Runner.build_params / build_functions)
-    keys = ["r0", "r1", "r2", "p", "q_I", "gamma_J", "k_J", "D", "S0", "phi"]
-
-    missing = [k for k in keys if k not in df.columns]
-    if missing:
-        raise ValueError(
-            f"CSV {csv_path.name} missing required columns: {missing}. "
-            f"Available columns: {list(df.columns)}"
-        )
-
     out: Dict[str, float] = {}
-    for k in keys:
+    for k in expected:
         val = s[k]
         try:
             out[k] = float(val)
@@ -214,19 +221,14 @@ def load_model_params_from_csv(csv_path: Path, row: int) -> Dict[str, float]:
     return out
 
 
-def make_param_sets_from_levels(
-    n_workers: int,
-    prefix: str,
-    base_out: Path,
-    levels: Tuple[int, int],
-) -> List[Dict[str, float]]:
+def make_param_sets_from_levels(n_workers: int, prefix: str, base_out: Path, levels: Tuple[int, int], *, model_cfg=SSB_CURRENT) -> List[Dict[str, float]]:
     order, row = levels
     out: List[Dict[str, float]] = []
     for i in range(1, n_workers + 1):
         out_folder = f"{prefix}{i}"
         csv_dir = base_out / out_folder / "csv"
         csv_path = choose_param_csv(csv_dir=csv_dir, out_folder=out_folder, order=order)
-        params = load_model_params_from_csv(csv_path=csv_path, row=row)
+        params = load_model_params_from_csv(csv_path=csv_path, row=row, model_cfg=model_cfg)
         out.append(params)
     return out
 
@@ -292,11 +294,7 @@ def apply_config_overrides(base_kwargs: Dict[str, Any], cfg: Dict[str, Any]) -> 
 # Worker
 # -----------------------------
 
-def _worker_run_one(
-    out_folder: str,
-    base_kwargs: Dict[str, Any],
-    model_params: Dict[str, float],
-) -> Tuple[str, Dict[str, Any]]:
+def _worker_run_one(out_folder: str, base_kwargs: Dict[str, Any], model_params: Dict[str, float]) -> Tuple[str, Dict[str, Any]]:
     kwargs = dict(base_kwargs)
     kwargs["model_params"] = dict(model_params)
 
@@ -363,12 +361,7 @@ def main() -> int:
         levels = parse_levels(levels_str)
         base_out = Path(base_kwargs.get("base_out", "out"))
         try:
-            param_sets = make_param_sets_from_levels(
-                n_workers=n_workers,
-                prefix=prefix,
-                base_out=base_out,
-                levels=levels,
-            )
+            param_sets = make_param_sets_from_levels(n_workers=n_workers, prefix=prefix, base_out=base_out, levels=levels)
         except Exception as e:
             print(f"[MAIN] ERROR while loading params via --levels {levels}: {type(e).__name__}: {e}", file=sys.stderr)
             return 2

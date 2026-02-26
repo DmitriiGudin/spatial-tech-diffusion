@@ -109,6 +109,55 @@ CA = dict(
 )
 
 
+CA_v2 = dict(
+    mesh_params=dict(
+        state_list=['CA'],
+        h_km=12,
+        simplify_km=36, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("pos", 1, 1e4)),
+    fem_model_params=dict(
+        r0=0.21682372494611601,
+        r1=0,
+        p=1.7966300331458806e-05,
+        q_I=0.11642553092295363,
+        gamma_J=0.00012305488346120747,
+        k_J=8.576616014263596e-05,
+        D=0.03381577568515316,
+        S0=12.82367787707364,
+    ),
+    time_params=dict(
+        start_year=2003.375,
+        T_years=21.625,
+        t_min_year=1998,
+        t_max_year=2024,
+    ),
+    cities={
+        "Los Angeles": [-118.2426, 34.0549],
+        "San Francisco": [-122.4194, 37.7749],
+        "San Diego": [-117.1611, 32.7157],
+        "San Jose": [-121.8853, 37.3387],
+        "Fresno": [-119.7871, 36.7378],
+        "Sacramento": [-121.4944, 38.5781],
+    },
+)
+
+
 IL = dict(
     mesh_params=dict(
         state_list=['IL'],
@@ -154,6 +203,45 @@ NY = dict(
     time_params=dict(
         start_year=2004,#2008,
         T_years=20,#16,
+        t_min_year=2002,
+        t_max_year=2024,
+    ),
+    cities={
+        "New York": [-74.0060, 40.7128],
+        "Buffalo": [-78.8789, 42.8869],
+        "Rochester": [-77.6088, 43.1566],
+        "Albany": [-73.7545, 42.6518],
+        "Kiryas Joel": [-74.1679, 41.3420],
+        "Syracuse": [-76.1474, 43.0495] 
+    },
+)
+
+
+NY_v2 = dict(
+    mesh_params=dict(
+        state_list=['NY'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("pos", 1, 1e4)),
+    time_params=dict(
+        start_year=2004,
+        T_years=20,
         t_min_year=2002,
         t_max_year=2024,
     ),

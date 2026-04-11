@@ -1921,11 +1921,11 @@ def run_parallel(
 
 if __name__ == "__main__":
     runner = Runner(
-        out_folder="example_ny_run",
+        out_folder="example_az_run",
         mesh_params=dict(
-            state_list=["NY"],
-            h_km=6,
-            simplify_km=18,
+            state_list=["AZ"], #NY
+            h_km=9,
+            simplify_km=27,
             epsg_project=5070,
         ),
         model_params=dict(
@@ -1960,14 +1960,14 @@ if __name__ == "__main__":
     )
 
     # Optional: cities for plots
-    runner.cities = {
+    '''runner.cities = {
         "New York": [-74.0060, 40.7128],
         "Buffalo": [-78.8789, 42.8869],
         "Rochester": [-77.6088, 43.1566],
         "Albany": [-73.7545, 42.6518],
         "Kiryas Joel": [-74.1679, 41.3420],
         "Syracuse": [-76.1474, 43.0495] 
-    }
+    }'''
 
     runner.build_mesh()
     summary = runner.run_FEM()

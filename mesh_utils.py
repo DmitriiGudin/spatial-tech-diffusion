@@ -1519,32 +1519,33 @@ def main():
     out_dir_fig.mkdir(parents=True, exist_ok=True)
 
     # ---- Create the mesh ----
-    h_km, simplify_km = 6, 18
+    h_km, simplify_km = 9, 27
+    state, state_lowercase = 'AZ', 'az'
     cfg_ca = MeshBuildConfig(h_km=h_km, simplify_km=h_km, epsg_project=5070)
-    msh_ca = out_dir_mesh / "ny_"+str(h_km)+"_"+str(simplify_km)+"_km.msh"
-    png_ca = out_dir_fig / "ny_"+str(h_km)+"_"+str(simplify_km)+"_mesh.png"
-    print("Building NY mesh ("+str(h_km)+" km)...")
-    build_mesh_from_admin1_region(admin1_shp, ["NY"], msh_ca, cfg_ca, verbose=True, model_name="ny_mesh_km")
+    msh_ca = out_dir_mesh / (state_lowercase+"_"+str(h_km)+"_"+str(simplify_km)+"_km.msh")
+    png_ca = out_dir_fig / (state_lowercase+"_"+str(h_km)+"_"+str(simplify_km)+"_mesh.png")
+    print("Building "+state+" mesh ("+str(h_km)+" km)...")
+    build_mesh_from_admin1_region(admin1_shp, [state], msh_ca, cfg_ca, verbose=True, model_name=state_lowercase+"_mesh_km")
     mesh_ca = load_mesh_km_from_msh(msh_ca)
     
     # ---- Mesh quality diagnostics ----
-    print_mesh_quality_diagnostics(mesh_ca, label=f"NY (h={cfg_ca.h_km:g} km)")
-    print("Plotting NY mesh...")
+    print_mesh_quality_diagnostics(mesh_ca, label=f"{state} (h={cfg_ca.h_km:g} km)")
+    print("Plotting "+state+" mesh...")
     plot_msh_triangles_lonlat(msh_ca, png_ca, epsg_project=cfg_ca.epsg_project)
 
     # ---- Population mass check + triangle comparison ----
-    print_population_mass_check(admin1_shp, ["NY"], msh_ca, year=2023, epsg_project=cfg_ca.epsg_project, mesh=mesh_ca)
-    pop_cmp_png = out_dir_fig / "ny_pop_true_vs_est_year2023.png"
-    plot_triangle_population_comparison(admin1_shp, ["NY"], msh_ca, pop_cmp_png, year=2023, epsg_project=cfg_ca.epsg_project, mesh=mesh_ca, h_km=cfg_ca.h_km)
+    print_population_mass_check(admin1_shp, [state], msh_ca, year=2023, epsg_project=cfg_ca.epsg_project, mesh=mesh_ca)
+    pop_cmp_png = out_dir_fig / (state_lowercase+"_pop_true_vs_est_year2023.png")
+    plot_triangle_population_comparison(admin1_shp, [state], msh_ca, pop_cmp_png, year=2023, epsg_project=cfg_ca.epsg_project, mesh=mesh_ca, h_km=cfg_ca.h_km)
     
     # ---- Load adoption events ----
     csv_events = base / "processed" / "solar_installations_all.csv"
     events_df = pd.read_csv(csv_events)
     events_df["state"] = events_df["state"].astype(str).str.strip()
-    events_ca_df = events_df.loc[events_df["state"] == "NY"].copy()
+    events_ca_df = events_df.loc[events_df["state"] == state].copy()
     
     # ---- Adoptions per month + cost (inflation-adjusted heuristic) ----
-    out_png1 = out_dir_fig / "ny_adoptions_vs_costs_cpi2025.png"
+    out_png1 = out_dir_fig / (state_lowercase+"_adoptions_vs_costs_cpi2025.png")
     plot_adoptions_vs_costs(
         events_df=events_ca_df,
         out_png=out_png1,
@@ -1573,7 +1574,7 @@ def main():
     )
     
     # ---- Total adoptions over time + bimodal log fit ----
-    out_png3 = out_dir_fig / "ny_total_adoptions_bimodal_logfit.png"
+    out_png3 = out_dir_fig / (state_lowercase+"_total_adoptions_bimodal_logfit.png")
     plot_total_adoptions_bimodal_log_fit(
         msh_path=msh_ca,
         events_df=events_ca_df,
@@ -1586,7 +1587,7 @@ def main():
     )
         
     # ---- Node adoptions vs node population + power-law fit ----
-    out_png4 = out_dir_fig / "ny_node_adoptions_vs_pop_powerlaw.png"
+    out_png4 = out_dir_fig / (state_lowercase+"_node_adoptions_vs_pop_powerlaw.png")
     plot_node_adoptions_vs_population_powerlaw(
         msh_path=msh_ca,
         events_df=events_ca_df,

@@ -184,6 +184,38 @@ IL = dict(
 )
 
 
+IL_v2 = dict(
+    mesh_params=dict(
+        state_list=['IL'],
+        h_km=7,
+        simplify_km=21, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("pos", 1, 1e4)),
+    time_params=dict(
+        start_year=2006,
+        T_years=18,
+        t_min_year=2006,
+        t_max_year=2024,
+    ),
+    cities={"Chicago": [-87.6324, 41.8832]},
+)
+
+
 NY = dict(
     mesh_params=dict(
         state_list=['NY'],
@@ -286,6 +318,44 @@ FL = dict(
     },
 )
 
+
+FL_v2 = dict(
+    mesh_params=dict(
+        state_list=['FL'],
+        h_km=8,
+        simplify_km=24, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("pos", 1, 1e4)),
+    time_params=dict(
+        start_year=2012,
+        T_years=12,
+        t_min_year=2002,
+        t_max_year=2024,
+    ),
+    cities={
+        "Miami": [-80.1918, 25.7617],
+        "Tampa": [-82.4588, 27.9517],
+        "Orlando": [-81.3789, 28.5384],
+        "Jacksonville": [-81.6592, 30.3298]
+    },
+)
+
+
 MN = dict(
     mesh_params=dict(
         state_list=['MN'],
@@ -314,5 +384,124 @@ MN = dict(
         "Fargo": [-97.1216, 47.0712],
         "Rochester": [-92.4588, 44.0193],
         "St Cloud": [-94.1632, 45.5579]
+    },
+)
+
+
+MN_v2 = dict(
+    mesh_params=dict(
+        state_list=['MN'],
+        h_km=8,
+        simplify_km=24, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("pos", 1, 1e4)),
+    time_params=dict(
+        start_year=2003,
+        T_years=20,
+        t_min_year=2002,
+        t_max_year=2023,
+    ),
+    cities={
+        "Minneapolis": [-93.2650, 44.9778],
+        "Duluth": [-92.1055, 46.7845],
+        "Fargo": [-97.1216, 47.0712],
+        "Rochester": [-92.4588, 44.0193],
+        "St Cloud": [-94.1632, 45.5579]
+    },
+)
+
+
+TX_v2 = dict(
+    mesh_params=dict(
+        state_list=['TX'],
+        h_km=15,
+        simplify_km=45, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("pos", 1, 1e4)),
+    time_params=dict(
+        start_year=2008,
+        T_years=15,
+        t_min_year=2002,
+        t_max_year=2023,
+    ),
+    cities={
+        "Dallas": [-96.8089, 32.7792],
+        "Houston": [-95.3701, 29.7601],
+        "San Antonio": [-98.4946, 29.4252],
+        "Austin": [-97.7431, 30.2672],
+        "McAllen": [-98.2300, 26.2034],
+        "El Paso": [-106.4850, 31.7619],
+        "Killeen": [-97.6982, 31.1242],
+        "Corpus Christi": [-97.4030, 27.7964]
+    },
+)
+
+
+AZ_v2 = dict(
+    mesh_params=dict(
+        state_list=['AZ'],
+        h_km=9,
+        simplify_km=27, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("pos", 1, 1e4)),
+    time_params=dict(
+        start_year=2008,
+        T_years=15,
+        t_min_year=2002,
+        t_max_year=2023,
+    ),
+    cities={
+        "Phoenix": [-112.0740, 33.4484],
+        "Tucson": [-110.9742, 32.2540],
+        "Prescott": [-112.4682, 34.5394],
+        "Lake Havasu City": [-114.3192, 34.4770],
+        "Kingman": [-114.0523, 35.1913],
+        "Yuma": [-114.6277, 32.6927],
+        "Flagstaff": [-111.6513, 35.1983]
     },
 )

@@ -1598,7 +1598,39 @@ def _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol: GSBSolution, funcs: GSBF
         fig.tight_layout()
         fig.savefig(out_j, dpi=200)
         plt.close(fig)
+        
 
+# =============================================================================
+# Other diagnostic helpers
+# =============================================================================
+
+def forecast_error_metrics(y: np.ndarray, mu: np.ndarray, eps: float = 1e-12, min_denom: float = 1.0) -> Dict[str, float]:
+    y = np.asarray(y, float)
+    mu = np.asarray(mu, float)
+
+    mask = np.isfinite(y) & np.isfinite(mu)
+    y = y[mask]
+    mu = mu[mask]
+
+    ae = np.abs(y - mu)
+    se = (y - mu) ** 2
+
+    # Avoid zero-count nodes dominating MAPE.
+    mape_mask = np.abs(y) >= float(min_denom)
+
+    out = {
+        "mae": float(np.mean(ae)) if y.size else np.nan,
+        "rmse": float(np.sqrt(np.mean(se))) if y.size else np.nan,
+        "log1p_mae": float(np.mean(np.abs(np.log1p(y) - np.log1p(np.maximum(mu, 0.0))))) if y.size else np.nan,
+        "log1p_rmse": float(np.sqrt(np.mean((np.log1p(y) - np.log1p(np.maximum(mu, 0.0))) ** 2))) if y.size else np.nan,
+        "smape": float(np.mean(2.0 * ae / np.maximum(np.abs(y) + np.abs(mu), eps))) if y.size else np.nan,
+        "mape_nonzero": float(np.mean(ae[mape_mask] / np.maximum(np.abs(y[mape_mask]), eps))) if np.any(mape_mask) else np.nan,
+        "total_observed": float(np.sum(y)),
+        "total_expected": float(np.sum(mu)),
+        "total_relative_error": float((np.sum(mu) - np.sum(y)) / max(float(np.sum(y)), eps)),
+    }
+    return out
+        
 
 # =============================================================================
 # Runner: mesh build + FEM run + diagnostics
@@ -1796,7 +1828,7 @@ class Runner:
         self.log(f"bin_events_year_node complete ({time.perf_counter() - t0:.3f} s)")
         self.log(f"[bin] window events={K_total:,} inside mesh={K_inside:,} shape={counts_node.shape}")
         if min_ts is not None and max_ts is not None:
-            self.log(f"[bin] inside-mesh date range: {min_ts.date()} → {max_ts.date()}")
+            self.log(f"[bin] inside-mesh date range: {min_ts.date()} -> {max_ts.date()}")
 
         # --- expected counts ---
         t0 = time.perf_counter()
@@ -1821,6 +1853,18 @@ class Runner:
         R_mabs = float(np.mean(np.abs(R)))
         R_rms = float(np.sqrt(np.mean(R ** 2)))
         self.log(f"[pearson] mean={R_mean:.3e} mean|R|={R_mabs:.3e} rms={R_rms:.3e}")
+        
+        metrics = forecast_error_metrics(counts_node, mu_node, eps=float(self.time_params.get("metric_eps", 1e-12)), min_denom=float(self.time_params.get("mape_min_denom", 1.0)))
+        
+        self.log(
+            "[metrics] "
+            f"MAE={metrics['mae']:.6g} "
+            f"RMSE={metrics['rmse']:.6g} "
+            f"SMAPE={metrics['smape']:.6g} "
+            f"MAPE_nonzero={metrics['mape_nonzero']:.6g} "
+            f"log1p_RMSE={metrics['log1p_rmse']:.6g} "
+            f"total_rel_err={metrics['total_relative_error']:.6g}"
+        )
 
         # --- plots ---
         h_km = float(self.mesh_params["h_km"])
@@ -1871,8 +1915,7 @@ class Runner:
         self.log(f"_plot_total_counts_monthly_bass_vs_gsb_vs_data complete ({time.perf_counter() - t0:.3f} s)")
 
         self.log("self.run_FEM complete")
-        return dict(out_folder=self.out_folder, state=st, mesh=str(msh), figures=str(self.fig_dir),
-            K_total=K_total, K_inside=K_inside, deviance=D_total, pearson_rms=R_rms)
+        return dict(out_folder=self.out_folder, state=st, mesh=str(msh), figures=str(self.fig_dir), K_total=K_total, K_inside=K_inside, deviance=D_total, pearson_rms=R_rms, **metrics)
 
 
 # =============================================================================
@@ -1921,11 +1964,11 @@ def run_parallel(
 
 if __name__ == "__main__":
     runner = Runner(
-        out_folder="example_az_run",
+        out_folder="example_oh_run",
         mesh_params=dict(
-            state_list=["AZ"], #NY
-            h_km=9,
-            simplify_km=27,
+            state_list=["MD"], #NY
+            h_km=3,
+            simplify_km=9,
             epsg_project=5070,
         ),
         model_params=dict(

@@ -505,3 +505,77 @@ AZ_v2 = dict(
         "Flagstaff": [-111.6513, 35.1983]
     },
 )
+
+VA_v2 = dict(
+    mesh_params=dict(
+        state_list=['VA'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("pos", 1, 1e4)),
+    time_params=dict(
+        start_year=2008,
+        T_years=11,
+        t_min_year=2002,
+        t_max_year=2020,
+    ),
+    cities={
+        "Arlington": [-77.0831, 38.8827],
+        "Virginia Beach": [-75.9792, 36.8516],
+        "Richmond": [-77.4360, 37.5407],
+        "Roanoke": [-79.9449, 37.2709],
+        "Lynchburg": [-79.1422, 37.4149],
+        "Charlottesville": [-78.4769, 38.0302]
+    },
+)
+
+OH_v2 = dict(
+    mesh_params=dict(
+        state_list=['OH'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("pos", 1, 1e4)),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2002,
+        t_max_year=2024,
+    ),
+    cities={
+        "Cleveland": [-81.6944, 41.4993],
+        "Columbus": [-83.0032, 39.9625],
+        "Cincinnati": [-84.5120, 39.1031],
+        "Dayton" : [-84.1936, 39.7592]
+    },
+)

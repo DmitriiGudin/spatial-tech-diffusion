@@ -1519,8 +1519,8 @@ def main():
     out_dir_fig.mkdir(parents=True, exist_ok=True)
 
     # ---- Create the mesh ----
-    h_km, simplify_km = 9, 27
-    state, state_lowercase = 'AZ', 'az'
+    h_km, simplify_km = 3, 9
+    state, state_lowercase = 'MD', 'md'
     cfg_ca = MeshBuildConfig(h_km=h_km, simplify_km=h_km, epsg_project=5070)
     msh_ca = out_dir_mesh / (state_lowercase+"_"+str(h_km)+"_"+str(simplify_km)+"_km.msh")
     png_ca = out_dir_fig / (state_lowercase+"_"+str(h_km)+"_"+str(simplify_km)+"_mesh.png")

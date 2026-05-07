@@ -36,6 +36,7 @@ Usage:
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import argparse
 import os
@@ -305,6 +306,41 @@ def _worker_run_one(out_folder: str, base_kwargs: Dict[str, Any], model_params: 
 
 
 # -----------------------------
+# Diagnostics helper
+# -----------------------------
+
+def summarize_metric(results: Dict[str, Dict[str, Any]], key: str, *, lower_is_better: bool = True) -> Optional[str]:
+    vals: List[Tuple[str, float]] = []
+
+    for folder, summary in results.items():
+        try:
+            v = float(summary.get(key, float("nan")))
+        except Exception:
+            continue
+        if np.isfinite(v):
+            vals.append((folder, v))
+
+    if not vals:
+        return None
+
+    folders = [x[0] for x in vals]
+    arr = np.array([x[1] for x in vals], dtype=float)
+
+    idx_best = int(np.argmin(arr) if lower_is_better else np.argmax(arr))
+    best_folder = folders[idx_best]
+    best_val = float(arr[idx_best])
+
+    mean = float(np.mean(arr))
+    std = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
+
+    return (f"{key}:\n"
+        f"- Best: {best_val:.6e} ({best_folder})\n"
+        f"- Mean: {mean:.6e}\n"
+        f"- Std:  {std:.6e}"
+    )
+
+
+# -----------------------------
 # Main
 # -----------------------------
 
@@ -402,16 +438,28 @@ def main() -> int:
     dt = time.time() - t0
 
     if results:
-        best_folder = min(results.keys(), key=lambda k: float(results[k].get("deviance", float("inf"))))
-        best = results[best_folder]
         print("\n[MAIN] Summary")
         print(f"[MAIN] Elapsed: {dt:.1f} s")
         print(f"[MAIN] Completed: {len(results)}/{n_workers}")
-        print(
-            f"[MAIN] Best (min deviance): {best_folder} "
-            f"deviance={float(best.get('deviance', float('nan'))):.6e} "
-            f"pearson_rms={float(best.get('pearson_rms', float('nan'))):.6e}"
-        )
+
+        metric_specs = [
+            ("deviance", True),
+            ("pearson_rms", True),
+            ("mae", True),
+            ("rmse", True),
+            ("log1p_mae", True),
+            ("log1p_rmse", True),
+            ("smape", True),
+            ("mape_nonzero", True),
+            ("total_relative_error", True),
+        ]
+
+        print("\n[MAIN] Metric summary")
+        for key, lower_is_better in metric_specs:
+            block = summarize_metric(results, key, lower_is_better=lower_is_better)
+            if block is not None:
+                print(block)
+                print()
 
     if failures:
         print("\n[MAIN] Failures:", file=sys.stderr)

@@ -487,6 +487,351 @@ def loglikelihood_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dic
 
 
 # =============================================================================
+# Smith-Song benchmark likelihood
+# =============================================================================
+
+@dataclass
+class SmithSongPrecompute:
+    """
+    Cache for the Smith-Song benchmark.
+
+    Sparse/local kernel:
+      neigh_idx[s, j] = destination node index r among source s's local neighbors
+      neigh_dist[s, j] = d_{s,r}
+
+    W caches exp(-theta * neigh_dist), thresholded by ss_kernel_tol.
+    """
+    neigh_idx: np.ndarray       # (N,K)
+    neigh_dist: np.ndarray      # (N,K)
+
+    M_hist: np.ndarray          # (nt,N), population mass at nodes
+    cost_hist: Optional[np.ndarray]
+    trend: Optional[np.ndarray]
+    A_nodes: np.ndarray
+
+    W_theta: Optional[float] = None
+    W: Optional[np.ndarray] = None
+
+    def get_W(self, theta_dist: float, *, kernel_tol: float = 1e-6) -> np.ndarray:
+        theta_dist = float(theta_dist)
+        if self.W is None or self.W_theta is None or float(self.W_theta) != theta_dist:
+            W = np.exp(-theta_dist * self.neigh_dist)
+            W[W < float(kernel_tol)] = 0.0
+            self.W = W
+            self.W_theta = theta_dist
+        return self.W
+
+
+def build_smith_song_precompute(stage_pre: StagePrecompute, *, top_k: int = 50) -> SmithSongPrecompute:
+    xy = np.asarray(stage_pre.fem_cache.xy_nodes_km, float)  # (N,2)
+    N = xy.shape[0]
+    K = min(int(top_k), N)
+
+    dx = xy[:, None, 0] - xy[None, :, 0]
+    dy = xy[:, None, 1] - xy[None, :, 1]
+    dist_mat = np.sqrt(dx * dx + dy * dy)
+
+    # For each source node s, keep K nearest destination nodes r.
+    neigh_idx = np.argpartition(dist_mat, kth=K - 1, axis=1)[:, :K]
+
+    # Sort those K neighbors by actual distance for reproducibility/debugging.
+    row = np.arange(N)[:, None]
+    neigh_dist_unsorted = dist_mat[row, neigh_idx]
+    order = np.argsort(neigh_dist_unsorted, axis=1)
+    neigh_idx = np.take_along_axis(neigh_idx, order, axis=1)
+    neigh_dist = np.take_along_axis(neigh_dist_unsorted, order, axis=1)
+
+    A_nodes = np.asarray(stage_pre.fem_cache.A_nodes, float)
+    rho = np.asarray(stage_pre.fem_cache.rho_total, float)
+    M_hist = np.maximum(rho * A_nodes[None, :], 0.0)
+
+    cost_hist = getattr(stage_pre.fem_cache, "cost_nodes", None)
+    if cost_hist is not None:
+        cost_hist = np.asarray(cost_hist, float)
+
+    trend = getattr(stage_pre.fem_cache, "trend_factor", None)
+    if trend is not None:
+        trend = np.asarray(trend, float)
+
+    return SmithSongPrecompute(neigh_idx=np.asarray(neigh_idx, dtype=np.int64), neigh_dist=np.asarray(neigh_dist, float),
+        M_hist=M_hist, cost_hist=cost_hist, trend=trend, A_nodes=A_nodes)
+
+
+def _smith_song_time_weights(times: np.ndarray, a: float, t_min: float, t_max: float) -> np.ndarray:
+    """
+    Discrete approximation to normalized exponential time intensity over solver snapshots.
+
+        w_k ∝ exp(a * t_k) * dt_k
+
+    Returns weights summing to 1 over snapshots inside [t_min, t_max].
+    """
+    times = np.asarray(times, float)
+    a = float(a)
+
+    nt = times.size
+    w = np.zeros(nt, dtype=float)
+    if nt == 0:
+        return w
+
+    if nt == 1:
+        if t_min <= times[0] <= t_max:
+            w[0] = 1.0
+        return w
+
+    # Cell edges around snapshots
+    edges = np.empty(nt + 1, dtype=float)
+    edges[1:-1] = 0.5 * (times[:-1] + times[1:])
+    edges[0] = times[0] - 0.5 * (times[1] - times[0])
+    edges[-1] = times[-1] + 0.5 * (times[-1] - times[-2])
+
+    # Clip cells to likelihood window
+    left = np.maximum(edges[:-1], float(t_min))
+    right = np.minimum(edges[1:], float(t_max))
+    width = np.maximum(right - left, 0.0)
+
+    mask = width > 0.0
+    if not np.any(mask):
+        return w
+
+    # Integral of exp(a t) over each clipped cell.
+    if abs(a) < 1e-12:
+        w[mask] = width[mask]
+    else:
+        # numerically stable enough for typical year-scale a;
+        # shift by t_min to avoid unnecessary exponent growth
+        l = left[mask] - float(t_min)
+        r = right[mask] - float(t_min)
+        w[mask] = (np.exp(a * r) - np.exp(a * l)) / a
+
+    total = float(np.sum(w))
+    if total <= 0.0 or not np.isfinite(total):
+        return np.zeros(nt, dtype=float)
+    return w / total
+
+
+def _smith_song_r_nodes_from_pre(ss_pre: SmithSongPrecompute, theta: Dict[str, float], k: int) -> np.ndarray:
+    """
+    Same r(x,t) convention as the PDE/FEM model:
+        r = max(0, r0 - r1*cost + r2*trend)
+    """
+    r0 = float(theta.get("r0", theta.get("r", 1.0)))
+    r1 = float(theta.get("r1", 0.0))
+    r2 = float(theta.get("r2", 0.0))
+
+    M_k = np.asarray(ss_pre.M_hist[k], float)
+
+    tf = 0.0
+    if ss_pre.trend is not None:
+        tf = float(ss_pre.trend[k])
+
+    if ss_pre.cost_hist is None:
+        return np.full_like(M_k, r0 + r2 * tf, dtype=float)
+
+    c_nodes = np.asarray(ss_pre.cost_hist[k], float)
+    return np.maximum(0.0, r0 - r1 * c_nodes + r2 * tf)
+
+
+def smith_song_expected_counts(stage_pre: StagePrecompute, theta: Dict[str, float], ss_pre: Optional[SmithSongPrecompute] = None, *,
+    t_min: float = 0.0, t_max: float = 25.0, eps: float = 1e-300, top_k: int = 50, kernel_tol: float = 1e-6, history_mode: str = "conditional") -> np.ndarray:
+    """
+    Snapshot-based Smith-Song expected node-time counts using a sparse/top-k
+    local exponential imitation kernel.
+    """
+    if ss_pre is None:
+        ss_pre = build_smith_song_precompute(stage_pre, top_k=top_k)
+
+    theta_dist = float(theta.get("theta", theta.get("theta_dist", 0.0)))
+    lambda_mix = float(theta.get("lambda", theta.get("lambda_mix", 0.5)))
+    a_time = float(theta.get("a", theta.get("a_time", 0.0)))
+
+    if theta_dist < 0.0 or not np.isfinite(theta_dist):
+        raise ValueError("Smith-Song theta/theta_dist must be finite and nonnegative.")
+    if not (0.0 < lambda_mix < 1.0):
+        raise ValueError("Smith-Song lambda/lambda_mix must lie in (0,1).")
+    if not np.isfinite(a_time):
+        raise ValueError("Smith-Song a/a_time must be finite.")
+        
+    history_mode = str(history_mode).lower().strip()
+    if history_mode not in ("conditional", "generative"):
+        raise ValueError("history_mode must be 'conditional' or 'generative'.")
+
+    nt = int(stage_pre.nt)
+    N = int(stage_pre.N)
+    mu = np.zeros((nt, N), dtype=float)
+
+    K_total = float(stage_pre.K_inside)
+    if K_total <= 0.0:
+        return mu
+
+    times = np.asarray(stage_pre.fem_cache.times, float)
+    w_time = _smith_song_time_weights(times, a=a_time, t_min=t_min, t_max=t_max)
+
+    neigh_idx = ss_pre.neigh_idx      # (N,K), source -> destinations
+    W = ss_pre.get_W(theta_dist, kernel_tol=kernel_tol)
+
+    n_prev = np.zeros(N, dtype=float)
+
+    for k in range(nt):
+        counts_k = np.asarray(stage_pre.counts_node[k], float)
+
+        if w_time[k] <= 0.0:
+            if history_mode == "conditional":
+                n_prev += counts_k
+            # In generative mode, zero expected mass means no model-generated history update.
+            continue
+
+        M_k = np.asarray(ss_pre.M_hist[k], float)
+        r_nodes = _smith_song_r_nodes_from_pre(ss_pre, theta, k)
+        E = np.maximum(M_k * r_nodes, 0.0)
+
+        Esum = float(np.sum(E))
+        if not np.isfinite(Esum) or Esum <= 0.0:
+            E = np.maximum(M_k, 0.0)
+            Esum = float(np.sum(E))
+            if Esum <= 0.0:
+                P_innov = np.full(N, 1.0 / max(N, 1), dtype=float)
+            else:
+                P_innov = E / Esum
+        else:
+            P_innov = E / Esum
+
+        N_prev = float(np.sum(n_prev))
+        if N_prev <= 0.0:
+            P_imit = P_innov
+        else:
+            # Sparse/local version of:
+            #   row_sum_s = sum_r W_sr E_r
+            #   P_imit_r = E_r * sum_s n_s W_sr / row_sum_s / N_prev
+
+            E_neigh = E[neigh_idx]                    # (N,K)
+            row_sum = np.sum(W * E_neigh, axis=1)     # (N,)
+
+            alpha = n_prev / np.maximum(row_sum, eps) # (N,)
+
+            # Accumulate beta_r = sum_s alpha_s W_sr over sparse edges.
+            beta = np.zeros(N, dtype=float)
+            np.add.at(beta, neigh_idx.ravel(), (alpha[:, None] * W).ravel())
+
+            P_imit = E * beta / max(N_prev, eps)
+
+            P_imit = np.maximum(P_imit, 0.0)
+            ps = float(np.sum(P_imit))
+            if ps <= 0.0 or not np.isfinite(ps):
+                P_imit = P_innov
+            else:
+                P_imit = P_imit / ps
+
+        P = lambda_mix * P_innov + (1.0 - lambda_mix) * P_imit
+        P = np.maximum(P, 0.0)
+        ps = float(np.sum(P))
+        if ps <= 0.0 or not np.isfinite(ps):
+            P = np.full(N, 1.0 / max(N, 1), dtype=float)
+        else:
+            P = P / ps
+
+        mu[k] = K_total * w_time[k] * P
+
+        # observed history drives imitation
+        if history_mode == "conditional":
+            # observed history drives imitation
+            n_prev += counts_k
+        else:
+            # model-generated expected history drives imitation
+            n_prev += mu[k]
+
+    return np.maximum(mu, eps)
+
+
+def negbin_loglik_counts(counts: np.ndarray, mu: np.ndarray, phi: float, *, logfact: Optional[np.ndarray] = None, mu_floor: float = 1e-12, ) -> float:
+    """
+    Negative-binomial / Poisson count log-likelihood for arrays of counts.
+
+    NB parameterization:
+        E[Y] = mu
+        Var[Y] = mu + mu^2/phi
+
+    phi infinite => Poisson.
+    """
+    c = np.asarray(counts, float)
+    mu = np.asarray(mu, float)
+
+    if c.shape != mu.shape:
+        raise ValueError(f"counts shape {c.shape} != mu shape {mu.shape}")
+
+    if logfact is None:
+        logfact = gammaln(c + 1.0)
+    else:
+        logfact = np.asarray(logfact, float)
+
+    if not np.all(np.isfinite(mu)) or np.any(mu < 0.0):
+        return float("-inf")
+
+    use_poisson = (not np.isfinite(phi))
+    mu_safe = np.maximum(mu, float(mu_floor))
+
+    if use_poisson:
+        mask = c > 0
+        ll = -float(np.sum(mu)) - float(np.sum(logfact))
+        if np.any(mask):
+            ll += float(np.sum(c[mask] * np.log(mu_safe[mask])))
+        return float(ll)
+
+    if not (phi > 0.0 and np.isfinite(phi)):
+        return float("-inf")
+
+    denom = mu_safe + float(phi)
+    term = (float(np.sum(phi * (np.log(phi) - np.log(denom)))) - float(np.sum(logfact)) - float(c.size * gammaln(phi)))
+
+    mask = c > 0
+    if np.any(mask):
+        term += float(np.sum(gammaln(c[mask] + phi)))
+        term += float(np.sum(c[mask] * (np.log(mu_safe[mask]) - np.log(denom[mask]))))
+
+    return float(term)
+
+
+def loglikelihood_smith_song_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dict[str, float], fem_cfg: FEMConfig, stage_pre: StagePrecompute, ll_cfg: LikelihoodConfig,
+    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, *, model_cfg: ModelConfig = SSB_CURRENT, smith_song_history_mode: str = "conditional") -> float:
+    """
+    Smith-Song benchmark likelihood with the same NB observation model as the PDE.
+
+    Signature intentionally mirrors loglikelihood_theta(...) so it can be plugged into
+    the existing SPSA/random-search machinery.
+    """
+    phi = float(theta.get("phi", np.inf))
+
+    try:
+        ss_pre = getattr(stage_pre, "_smith_song_pre", None)
+        if ss_pre is None:
+            ss_pre = build_smith_song_precompute(stage_pre, top_k=50)
+            setattr(stage_pre, "_smith_song_pre", ss_pre)
+
+        mu = smith_song_expected_counts(stage_pre=stage_pre, theta=theta, ss_pre=ss_pre, t_min=ll_cfg.t_min, t_max=ll_cfg.t_max,
+            eps=1e-300, top_k=50, kernel_tol=1e-6, history_mode=smith_song_history_mode)
+    except Exception:
+        return float("-inf")
+
+    ll_raw = negbin_loglik_counts(counts=stage_pre.counts_node, mu=mu, phi=phi, logfact=stage_pre.counts_logfact, mu_floor=ll_cfg.lambda_floor)
+
+    if not np.isfinite(ll_raw):
+        return float("-inf")
+
+    if ll_cfg.normalize_by_events:
+        ll = ll_raw / float(max(1, stage_pre.K_inside))
+    else:
+        ll = ll_raw
+
+    if ll_cfg.verbose:
+        kind = "Poisson" if not np.isfinite(phi) else f"NegBin(phi={phi:.6g})"
+        print(
+            f"[ll:SmithSong:{kind}] Kwin={stage_pre.K_total_window} "
+            f"K_in={stage_pre.K_inside} ll={ll_raw:.3e} ll_per_ev={ll:.6g}"
+        )
+
+    return float(ll)
+
+
+# =============================================================================
 # Optimization: SPSA in transformed space + coarse-to-fine schedule
 # =============================================================================
 
@@ -698,7 +1043,8 @@ def _fmt_theta_compact(th: Dict[str, float], specs: Optional[List["ParamSpec"]] 
     return " ".join(parts)
 
 def run_spsa_stage(stage: StageConfig, funcs_template: GSBFunctions, z0: np.ndarray, specs: List[ParamSpec], stage_pre: StagePrecompute, 
-    ll_cfg: LikelihoodConfig, sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, progress: Optional[Callable[[int], None]] = None) -> Tuple[np.ndarray, FitResult]:
+    ll_cfg: LikelihoodConfig, sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, progress: Optional[Callable[[int], None]] = None,
+    ll_func: Callable[..., float] = loglikelihood_theta) -> Tuple[np.ndarray, FitResult]:
     
     rng = np.random.default_rng(stage.opt_cfg.seed)
     z = z0.copy()
@@ -708,7 +1054,7 @@ def run_spsa_stage(stage: StageConfig, funcs_template: GSBFunctions, z0: np.ndar
     history: List[Tuple[int, float, Dict[str, float]]] = []
 
     th0 = unpack_z_to_theta(z, specs)
-    ll0 = loglikelihood_theta(stage.msh_path, funcs_template, th0, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
+    ll0 = ll_func(stage.msh_path, funcs_template, th0, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
     best_ll, best_theta = ll0, th0
     if stage.opt_cfg.print_every > 0:
         print(f"[SPSA] iter 0/{stage.opt_cfg.n_iter} ll={ll0:.6e} best={best_ll:.6e} {_fmt_theta_compact(th0, specs)}")
@@ -725,8 +1071,8 @@ def run_spsa_stage(stage: StageConfig, funcs_template: GSBFunctions, z0: np.ndar
         th_plus = unpack_z_to_theta(z_plus, specs)
         th_minus = unpack_z_to_theta(z_minus, specs)
 
-        ll_plus = loglikelihood_theta(stage.msh_path, funcs_template, th_plus, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
-        ll_minus = loglikelihood_theta(stage.msh_path, funcs_template, th_minus, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
+        ll_plus = ll_func(stage.msh_path, funcs_template, th_plus, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
+        ll_minus = ll_func(stage.msh_path, funcs_template, th_minus, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
 
         ghat = (ll_plus - ll_minus) / (2.0 * ck) * delta
         ghat = np.clip(ghat, -stage.opt_cfg.grad_clip, stage.opt_cfg.grad_clip)
@@ -736,7 +1082,7 @@ def run_spsa_stage(stage: StageConfig, funcs_template: GSBFunctions, z0: np.ndar
         z = z + dz
 
         th = unpack_z_to_theta(z, specs)
-        ll = loglikelihood_theta(stage.msh_path, funcs_template, th, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
+        ll = ll_func(stage.msh_path, funcs_template, th, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
 
         if np.isfinite(ll) and ll > best_ll:
             best_ll = ll
@@ -866,7 +1212,7 @@ def sample_theta_from_ranges(rng: np.random.Generator, specs: List[ParamSpec], t
 
 def random_search_candidates(stage: StageConfig, funcs_template: GSBFunctions, specs: List[ParamSpec], stage_pre: StagePrecompute,
     ll_cfg: LikelihoodConfig, rs_cfg: RandomSearchConfig, sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
-    progress: Optional[Callable[[int], None]] = None) -> List[Tuple[float, Dict[str, float]]]:
+    progress: Optional[Callable[[int], None]] = None, ll_func: Callable[..., float] = loglikelihood_theta) -> List[Tuple[float, Dict[str, float]]]:
     """
     Returns list sorted by descending ll: [(ll, theta), ...]
     """
@@ -878,7 +1224,7 @@ def random_search_candidates(stage: StageConfig, funcs_template: GSBFunctions, s
 
     for i in range(n_eval):
         th = sample_theta_from_ranges(rng, specs, theta_ranges)
-        ll = loglikelihood_theta(stage.msh_path, funcs_template, th, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
+        ll = ll_func(stage.msh_path, funcs_template, th, stage.fem_cfg, stage_pre, ll_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
         if np.isfinite(ll):
             scored.append((float(ll), th))
             
@@ -905,9 +1251,10 @@ def _keep_top(scored: List[Tuple[float, Dict[str, float]]], K_keep: Optional[int
 
 
 def multi_start_refine(stage: StageConfig, funcs_template: GSBFunctions, specs: List[ParamSpec], stage_pre: StagePrecompute, ll_cfg: LikelihoodConfig, rs_cfg: RandomSearchConfig, 
-    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, progress: Optional[Callable[[int], None]] = None) -> Tuple[np.ndarray, FitResult]:
+    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, progress: Optional[Callable[[int], None]] = None,
+    ll_func: Callable[..., float] = loglikelihood_theta) -> Tuple[np.ndarray, FitResult]:
     
-    scored = random_search_candidates(stage, funcs_template, specs, stage_pre, ll_cfg, rs_cfg, sync_boxes=sync_boxes, progress=progress,)
+    scored = random_search_candidates(stage, funcs_template, specs, stage_pre, ll_cfg, rs_cfg, sync_boxes=sync_boxes, progress=progress, ll_func=ll_func)
     if not scored:
         raise RuntimeError("Random search produced no finite likelihood candidates.")
 
@@ -926,7 +1273,7 @@ def multi_start_refine(stage: StageConfig, funcs_template: GSBFunctions, specs: 
             stage_local = StageConfig(mesh_cfg=stage.mesh_cfg, fem_cfg=stage.fem_cfg, opt_cfg=opt_cfg, msh_path=stage.msh_path, model_cfg=stage.model_cfg)
 
             z0 = pack_theta_to_z(th_seed, specs)
-            z_best, res = run_spsa_stage(stage_local, funcs_template, z0, specs, stage_pre, ll_cfg, sync_boxes=sync_boxes, progress=progress)
+            z_best, res = run_spsa_stage(stage_local, funcs_template, z0, specs, stage_pre, ll_cfg, sync_boxes=sync_boxes, progress=progress, ll_func=ll_func)
             refined.append((float(res.ll_best), res.theta_best))
 
         refined.sort(key=lambda x: x[0], reverse=True)
@@ -950,7 +1297,7 @@ def multi_start_refine(stage: StageConfig, funcs_template: GSBFunctions, specs: 
     stage_final = StageConfig(mesh_cfg=stage.mesh_cfg, fem_cfg=stage.fem_cfg, opt_cfg=opt_cfg, msh_path=stage.msh_path, model_cfg=stage.model_cfg)
 
     z0 = pack_theta_to_z(best_th, specs)
-    z_best, res_best = run_spsa_stage(stage_final, funcs_template, z0, specs, stage_pre, ll_cfg, sync_boxes=sync_boxes, progress=progress)
+    z_best, res_best = run_spsa_stage(stage_final, funcs_template, z0, specs, stage_pre, ll_cfg, sync_boxes=sync_boxes, progress=progress, ll_func=ll_func)
 
     # Save final result (single row) and also "final top list" if preferred
     if rs_cfg.save_dir is not None:
@@ -1025,6 +1372,8 @@ class Runner:
         mesh_verbose: bool = False,
         ll_verbose: bool = False,
         ll_verbose_freq: Optional[int] = None,
+        benchmark_model: str = "gsb",
+        smith_song_history_mode: str = "conditional",
     ):
         self.out_folder = str(out_folder)
         self._t0 = time.time()
@@ -1078,6 +1427,10 @@ class Runner:
 
         # computed later
         self.msh_path: Optional[Path] = None
+        
+        # benchmark model
+        self.benchmark_model = str(benchmark_model).lower().strip()
+        self.smith_song_history_mode = str(smith_song_history_mode).lower().strip()
 
     # -------------------------
     # Mesh building
@@ -1173,7 +1526,17 @@ class Runner:
             stage = StageConfig(mesh_cfg=MeshBuildConfig(h_km=float(self.mesh_params["h_km"]), simplify_km=float(self.mesh_params["simplify_km"]), epsg_project=self.epsg_project),
                 fem_cfg=fem_cfg, opt_cfg=opt_cfg, msh_path=self.msh_path, model_cfg=self.model_cfg)
 
+            self._log("precompute_stage_objects starting")
             stage_pre = precompute_stage_objects(stage.msh_path, stage.fem_cfg, events, ll_cfg)
+            self._log("precompute_stage_objects complete")
+            
+            if self.benchmark_model in ("gsb", "pde", "fem"):
+                ll_func = loglikelihood_theta
+            elif self.benchmark_model in ("smith_song", "smith-song", "smithsong"):
+                def ll_func(*args, **kwargs):
+                    return loglikelihood_smith_song_theta(*args, **kwargs, smith_song_history_mode=self.smith_song_history_mode)
+            else:
+                raise ValueError(f"Unknown benchmark_model={self.benchmark_model!r}. Use 'gsb' or 'smith_song'.")
 
             rs_cfg = RandomSearchConfig(N_0=int(self.randomSearch_params["N_0"]), stages=tuple(self.randomSearch_params["stages"]), final_n_iter=int(self.spsa_params["n_iter"]),
                 seed=int(self.randomSearch_params["seed"]), theta_ranges=None, save_dir=self.csv_dir, save_prefix=self.rs_save_prefix)
@@ -1187,8 +1550,9 @@ class Runner:
 
             progress_cb = tracker.tick if (self.ll_verbose_freq is not None and self.ll_verbose_freq > 0) else None
 
-            z_best, res_best = multi_start_refine(stage=stage, funcs_template=funcs, specs=specs, stage_pre=stage_pre, ll_cfg=ll_cfg, rs_cfg=rs_cfg,
-                sync_boxes=sync_boxes, progress=progress_cb)
+            self._log(f"optimization starting with benchmark_model={self.benchmark_model}")
+            z_best, res_best = multi_start_refine(stage=stage, funcs_template=funcs, specs=specs, stage_pre=stage_pre,
+                ll_cfg=ll_cfg, rs_cfg=rs_cfg, sync_boxes=sync_boxes, progress=progress_cb, ll_func=ll_func)
 
             trace_png = self.fig_dir / f"{self.rs_save_prefix}_loglik_trace.png"
             save_ll_trace(res_best.history, trace_png)

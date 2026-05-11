@@ -1862,6 +1862,7 @@ class Runner:
             f"RMSE={metrics['rmse']:.6g} "
             f"SMAPE={metrics['smape']:.6g} "
             f"MAPE_nonzero={metrics['mape_nonzero']:.6g} "
+            f"log1p_MAE={metrics['log1p_mae']:.6g} "
             f"log1p_RMSE={metrics['log1p_rmse']:.6g} "
             f"total_rel_err={metrics['total_relative_error']:.6g}"
         )

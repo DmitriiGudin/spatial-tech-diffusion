@@ -51,6 +51,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from fem_utils import Runner
 from model_configs import SSB_CURRENT
+from benchmark_utils import run_smith_song_diagnostics
 
 
 # -----------------------------
@@ -96,7 +97,7 @@ def make_base_runner_kwargs_from_configs_default(state_cli: str = "") -> Dict[st
     )
 
     # Optional Runner fields that your Runner supports
-    for k in ["base_out", "events_csv", "events_state_col", "years_to_plot", "month_window"]:
+    for k in ["base_out", "events_csv", "events_state_col", "years_to_plot", "month_window", "benchmark_model", "smith_song_history_mode"]:
         if k in d:
             out[k] = d[k]
 
@@ -178,7 +179,19 @@ def choose_param_csv(csv_dir: Path, out_folder: str, order: int) -> Path:
     return stages[-1 - k][1]
 
 
-def load_model_params_from_csv(csv_path: Path, row: int, *, model_cfg=SSB_CURRENT, always_params: Tuple[str, ...] = ("r0", "r1", "r2", "phi")) -> Dict[str, float]:
+def expected_param_names_for_benchmark(benchmark_model: str, *, model_cfg=SSB_CURRENT) -> Tuple[str, ...]:
+    bm = str(benchmark_model).lower().strip()
+
+    if bm in ("gsb", "pde", "fem"):
+        return tuple(getattr(model_cfg, "core_param_names", ("p", "q_I"))) + tuple(getattr(model_cfg, "param_names", ())) + ("r0", "r1", "r2", "phi")
+
+    if bm in ("smith_song", "smith-song", "smithsong"):
+        return ("theta", "lambda_mix", "a_time", "r0", "r1", "r2", "phi")
+
+    raise ValueError(f"Unknown benchmark_model={benchmark_model!r}.")
+
+
+def load_model_params_from_csv(csv_path: Path, row: int, *, benchmark_model: str = "gsb", model_cfg=SSB_CURRENT) -> Dict[str, float]:
     """
     Load a row of parameters from a CSV and require an EXACT match with:
         expected = model_cfg.core_param_names + model_cfg.param_names + always_params
@@ -192,7 +205,7 @@ def load_model_params_from_csv(csv_path: Path, row: int, *, model_cfg=SSB_CURREN
     if row < 0 or row >= df.shape[0]:
         raise ValueError(f"Row {row} out of range for {csv_path.name}: nrows={df.shape[0]}")
 
-    expected = (list(getattr(model_cfg, "core_param_names", ("p", "q_I"))) + list(getattr(model_cfg, "param_names", ())) + list(always_params))
+    expected = list(expected_param_names_for_benchmark(benchmark_model, model_cfg=model_cfg))
     expected_set = set(expected)
 
     # Columns present (ignore 'll' only)
@@ -207,7 +220,6 @@ def load_model_params_from_csv(csv_path: Path, row: int, *, model_cfg=SSB_CURREN
             f"  CSV:   {csv_path.name}\n"
             f"  Missing columns: {missing}\n"
             f"  Extra columns:   {extra}\n"
-            f"  Allowed global params: {list(always_params)}\n"
             "Fix: use CSVs produced by the same model, or switch SSB_CURRENT to match.")
 
     s = df.iloc[int(row)]
@@ -222,14 +234,14 @@ def load_model_params_from_csv(csv_path: Path, row: int, *, model_cfg=SSB_CURREN
     return out
 
 
-def make_param_sets_from_levels(n_workers: int, prefix: str, base_out: Path, levels: Tuple[int, int], *, model_cfg=SSB_CURRENT) -> List[Dict[str, float]]:
+def make_param_sets_from_levels(n_workers: int, prefix: str, base_out: Path, levels: Tuple[int, int], *, benchmark_model: str = "gsb", model_cfg=SSB_CURRENT) -> List[Dict[str, float]]:
     order, row = levels
     out: List[Dict[str, float]] = []
     for i in range(1, n_workers + 1):
         out_folder = f"{prefix}{i}"
         csv_dir = base_out / out_folder / "csv"
         csv_path = choose_param_csv(csv_dir=csv_dir, out_folder=out_folder, order=order)
-        params = load_model_params_from_csv(csv_path=csv_path, row=row, model_cfg=model_cfg)
+        params = load_model_params_from_csv(csv_path=csv_path, row=row, benchmark_model=benchmark_model, model_cfg=model_cfg)
         out.append(params)
     return out
 
@@ -278,7 +290,7 @@ def apply_config_overrides(base_kwargs: Dict[str, Any], cfg: Dict[str, Any]) -> 
     out["time_params"] = merge_nested_dict(out.get("time_params", {}), cfg.get("time_params"))
 
     # Top-level keys (Runner-related)
-    for k in ["fem_verbose", "mesh_verbose", "cities", "base_out", "events_csv", "events_state_col", "years_to_plot", "month_window"]:
+    for k in ["fem_verbose", "mesh_verbose", "cities", "base_out", "events_csv", "events_state_col", "years_to_plot", "month_window", "benchmark_model", "smith_song_history_mode"]:
         if k in cfg:
             out[k] = cfg[k]
 
@@ -299,10 +311,33 @@ def _worker_run_one(out_folder: str, base_kwargs: Dict[str, Any], model_params: 
     kwargs = dict(base_kwargs)
     kwargs["model_params"] = dict(model_params)
 
-    runner = Runner(out_folder=out_folder, **kwargs)
-    runner.build_mesh()
-    summary = runner.run_FEM()
-    return out_folder, dict(summary)
+    benchmark_model = str(kwargs.pop("benchmark_model", "gsb")).lower().strip()
+
+    if benchmark_model in ("gsb", "pde", "fem"):
+        runner = Runner(out_folder=out_folder, **kwargs)
+        runner.build_mesh()
+        summary = runner.run_FEM()
+        summary["benchmark_model"] = "gsb"
+        return out_folder, dict(summary)
+
+    if benchmark_model in ("smith_song", "smith-song", "smithsong"):
+        summary = run_smith_song_diagnostics(
+            out_folder=out_folder,
+            mesh_params=kwargs["mesh_params"],
+            model_params=kwargs["model_params"],
+            time_params=kwargs["time_params"],
+            smith_song_history_mode=str(kwargs.get("smith_song_history_mode", "conditional")),
+            fem_verbose=bool(kwargs.get("fem_verbose", False)),
+            mesh_verbose=bool(kwargs.get("mesh_verbose", False)),
+            cities=dict(kwargs.get("cities", {})),
+            years_to_plot=kwargs.get("years_to_plot", None),
+            events_csv=Path(kwargs.get("events_csv", Path("data") / "processed" / "solar_installations_all.csv")),
+            events_state_col=str(kwargs.get("events_state_col", "state")),
+            base_out=Path(kwargs.get("base_out", "out")),
+        )
+        return out_folder, dict(summary)
+
+    raise ValueError(f"Unknown benchmark_model={benchmark_model!r}. Use 'gsb' or 'smith_song'.")
 
 
 # -----------------------------
@@ -389,15 +424,44 @@ def main() -> int:
 
     # Pre-build mesh once
     first_folder = f"{prefix}1"
-    runner0 = Runner(out_folder=first_folder, **base_kwargs)
-    runner0.build_mesh()
+    benchmark_model = str(base_kwargs.get("benchmark_model", "gsb")).lower().strip()
+    
+    if benchmark_model in ("gsb", "pde", "fem"):
+        runner0_kwargs = dict(base_kwargs)
+        runner0_kwargs.pop("benchmark_model", None)
+        runner0 = Runner(out_folder=first_folder, **runner0_kwargs)
+        runner0.build_mesh()
+    
+    elif benchmark_model in ("smith_song", "smith-song", "smithsong"):
+        # run_smith_song_diagnostics builds/reuses the same mesh path convention.
+        # Use one dry build through the benchmark runner machinery.
+        from benchmark_utils import SmithSongDiagnosticRunner
+    
+        runner0 = SmithSongDiagnosticRunner(
+            out_folder=first_folder,
+            mesh_params=base_kwargs["mesh_params"],
+            model_params=base_kwargs["model_params"],
+            time_params=base_kwargs["time_params"],
+            smith_song_history_mode=str(base_kwargs.get("smith_song_history_mode", "conditional")),
+            fem_verbose=bool(base_kwargs.get("fem_verbose", False)),
+            mesh_verbose=bool(base_kwargs.get("mesh_verbose", False)),
+            cities=dict(base_kwargs.get("cities", {})),
+            years_to_plot=base_kwargs.get("years_to_plot", None),
+            events_csv=Path(base_kwargs.get("events_csv", Path("data") / "processed" / "solar_installations_all.csv")),
+            events_state_col=str(base_kwargs.get("events_state_col", "state")),
+            base_out=Path(base_kwargs.get("base_out", "out")),
+        )
+        runner0.build_mesh()
+    
+    else:
+        raise SystemExit(f"ERROR: Unknown benchmark_model={benchmark_model!r}. Use 'gsb' or 'smith_song'.")
 
     # Build parameter sets
     if levels_str:
         levels = parse_levels(levels_str)
         base_out = Path(base_kwargs.get("base_out", "out"))
         try:
-            param_sets = make_param_sets_from_levels(n_workers=n_workers, prefix=prefix, base_out=base_out, levels=levels)
+            param_sets = make_param_sets_from_levels(n_workers=n_workers, prefix=prefix, base_out=base_out, levels=levels, benchmark_model=str(base_kwargs.get("benchmark_model", "gsb")))
         except Exception as e:
             print(f"[MAIN] ERROR while loading params via --levels {levels}: {type(e).__name__}: {e}", file=sys.stderr)
             return 2

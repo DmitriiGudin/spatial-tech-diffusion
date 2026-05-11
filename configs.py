@@ -579,3 +579,131 @@ OH_v2 = dict(
         "Dayton" : [-84.1936, 39.7592]
     },
 )
+
+OH_smith_song = dict(
+    mesh_params=dict(
+        state_list=["OH"],
+        h_km=6,
+        simplify_km=18,
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),          # distance decay
+        lambda_mix=("pos", 1e-5, 1), # innovation probability
+        a_time=("nonneg", 0, 2),         # temporal growth
+        phi=("pos", 1, 1e4),
+    ),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2002,
+        t_max_year=2024,
+    ),
+    cities={
+        "Cleveland": [-81.6944, 41.4993],
+        "Columbus": [-83.0032, 39.9625],
+        "Cincinnati": [-84.5120, 39.1031],
+        "Dayton" : [-84.1936, 39.7592]
+    },
+    benchmark_model="smith_song",
+    smith_song_history_mode="conditional",
+)
+
+TX_smith_song = dict(
+    mesh_params=dict(
+        state_list=['TX'],
+        h_km=15,
+        simplify_km=45, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),          # distance decay
+        lambda_mix=("pos", 1e-5, 1), # innovation probability
+        a_time=("nonneg", 0, 2),         # temporal growth
+        phi=("pos", 1, 1e4),
+    ),
+    time_params=dict(
+        start_year=2008,
+        T_years=15,
+        t_min_year=2002,
+        t_max_year=2023,
+    ),
+    cities={
+        "Dallas": [-96.8089, 32.7792],
+        "Houston": [-95.3701, 29.7601],
+        "San Antonio": [-98.4946, 29.4252],
+        "Austin": [-97.7431, 30.2672],
+        "McAllen": [-98.2300, 26.2034],
+        "El Paso": [-106.4850, 31.7619],
+        "Killeen": [-97.6982, 31.1242],
+        "Corpus Christi": [-97.4030, 27.7964]
+    },
+    benchmark_model="smith_song",
+    smith_song_history_mode="conditional",
+)
+
+FL_smith_song = dict(
+    mesh_params=dict(
+        state_list=['FL'],
+        h_km=8,
+        simplify_km=24, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),          # distance decay
+        lambda_mix=("pos", 1e-5, 1), # innovation probability
+        a_time=("nonneg", 0, 2),         # temporal growth
+        phi=("pos", 1, 1e4),
+    ),
+    time_params=dict(
+        start_year=2012,
+        T_years=12,
+        t_min_year=2002,
+        t_max_year=2024,
+    ),
+    cities={
+        "Miami": [-80.1918, 25.7617],
+        "Tampa": [-82.4588, 27.9517],
+        "Orlando": [-81.3789, 28.5384],
+        "Jacksonville": [-81.6592, 30.3298]
+    },
+    benchmark_model="smith_song",
+    smith_song_history_mode="conditional",
+)
+
+OH_smith_song_generative = dict(
+    mesh_params=dict(
+        state_list=["OH"],
+        h_km=6,
+        simplify_km=18,
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),          # distance decay
+        lambda_mix=("pos", 1e-5, 1), # innovation probability
+        a_time=("nonneg", 0, 2),         # temporal growth
+        phi=("pos", 1, 1e4),
+    ),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2002,
+        t_max_year=2024,
+    ),
+    cities={
+        "Cleveland": [-81.6944, 41.4993],
+        "Columbus": [-83.0032, 39.9625],
+        "Cincinnati": [-84.5120, 39.1031],
+        "Dayton" : [-84.1936, 39.7592]
+    },
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)

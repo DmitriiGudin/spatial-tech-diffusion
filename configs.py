@@ -144,7 +144,7 @@ CA_v2 = dict(
     time_params=dict(
         start_year=2003.375,
         T_years=21.625,
-        t_min_year=1998,
+        t_min_year=2003,
         t_max_year=2024,
     ),
     cities={
@@ -274,7 +274,7 @@ NY_v2 = dict(
     time_params=dict(
         start_year=2004,
         T_years=20,
-        t_min_year=2002,
+        t_min_year=2004,
         t_max_year=2024,
     ),
     cities={
@@ -344,7 +344,7 @@ FL_v2 = dict(
     time_params=dict(
         start_year=2012,
         T_years=12,
-        t_min_year=2002,
+        t_min_year=2012,
         t_max_year=2024,
     ),
     cities={
@@ -413,7 +413,7 @@ MN_v2 = dict(
     time_params=dict(
         start_year=2003,
         T_years=20,
-        t_min_year=2002,
+        t_min_year=2003,
         t_max_year=2023,
     ),
     cities={
@@ -451,7 +451,7 @@ TX_v2 = dict(
     time_params=dict(
         start_year=2008,
         T_years=15,
-        t_min_year=2002,
+        t_min_year=2008,
         t_max_year=2023,
     ),
     cities={
@@ -492,7 +492,7 @@ AZ_v2 = dict(
     time_params=dict(
         start_year=2008,
         T_years=15,
-        t_min_year=2002,
+        t_min_year=2008,
         t_max_year=2023,
     ),
     cities={
@@ -531,8 +531,8 @@ VA_v2 = dict(
     time_params=dict(
         start_year=2008,
         T_years=11,
-        t_min_year=2002,
-        t_max_year=2020,
+        t_min_year=2008,
+        t_max_year=2021,
     ),
     cities={
         "Arlington": [-77.0831, 38.8827],
@@ -569,7 +569,7 @@ OH_v2 = dict(
     time_params=dict(
         start_year=2008,
         T_years=16,
-        t_min_year=2002,
+        t_min_year=2008,
         t_max_year=2024,
     ),
     cities={
@@ -598,7 +598,7 @@ OH_smith_song = dict(
     time_params=dict(
         start_year=2008,
         T_years=16,
-        t_min_year=2002,
+        t_min_year=2008, #2002
         t_max_year=2024,
     ),
     cities={
@@ -629,7 +629,7 @@ TX_smith_song = dict(
     time_params=dict(
         start_year=2008,
         T_years=15,
-        t_min_year=2002,
+        t_min_year=2008, #2002
         t_max_year=2023,
     ),
     cities={
@@ -664,7 +664,7 @@ FL_smith_song = dict(
     time_params=dict(
         start_year=2012,
         T_years=12,
-        t_min_year=2002,
+        t_min_year=2012, #2002
         t_max_year=2024,
     ),
     cities={
@@ -695,7 +695,7 @@ OH_smith_song_generative = dict(
     time_params=dict(
         start_year=2008,
         T_years=16,
-        t_min_year=2002,
+        t_min_year=2008, #2002
         t_max_year=2024,
     ),
     cities={

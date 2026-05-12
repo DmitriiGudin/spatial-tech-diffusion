@@ -9,9 +9,14 @@ from typing import Any, Dict, Optional, Sequence, List
 
 import time
 import numpy as np
+import pandas as pd
 
 from fem_utils import (
     FEMConfig,
+    load_mesh_km_from_msh,
+    bin_events_year_node,
+    bin_events_month_total_inside_mesh,
+    make_month_edges_years,
     poisson_deviance,
     pearson_residuals,
     forecast_error_metrics,
@@ -81,35 +86,116 @@ def aggregate_snapshot_node_to_year_node(values_tn: np.ndarray, times: np.ndarra
 # Plotting helpers
 # =============================================================================
 
-def _plot_smith_song_monthly_totals(out_png: Path, times: np.ndarray, YEAR0: float, counts_snap_node: np.ndarray, mu_snap_node: np.ndarray,
-    title: str = "Smith-Song monthly totals: Data vs prediction"):
+def _aggregate_snapshot_mass_to_months(
+    mass_t: np.ndarray,
+    times: np.ndarray,
+    month_edges_years: np.ndarray,
+) -> np.ndarray:
+    """
+    Aggregate snapshot-assigned mass to true calendar month intervals.
+
+    mass_t[k] is interpreted as mass over the snapshot cell centered at times[k].
+    We distribute mass proportionally by overlap with each calendar-month interval.
+    """
+    mass_t = np.asarray(mass_t, float)
+    times = np.asarray(times, float)
+    month_edges_years = np.asarray(month_edges_years, float)
+
+    nt = times.size
+    nm = month_edges_years.size - 1
+    out = np.zeros(nm, dtype=float)
+
+    if nt == 0 or nm <= 0:
+        return out
+
+    if nt == 1:
+        k_edges = np.array([times[0] - 0.5, times[0] + 0.5], dtype=float)
+    else:
+        k_edges = np.empty(nt + 1, dtype=float)
+        k_edges[1:-1] = 0.5 * (times[:-1] + times[1:])
+        k_edges[0] = times[0] - 0.5 * (times[1] - times[0])
+        k_edges[-1] = times[-1] + 0.5 * (times[-1] - times[-2])
+
+    for k in range(nt):
+        a = float(k_edges[k])
+        b = float(k_edges[k + 1])
+        width = b - a
+        if width <= 0:
+            continue
+
+        # months overlapping this snapshot cell
+        j0 = max(0, int(np.searchsorted(month_edges_years, a, side="right") - 1))
+        j1 = min(nm - 1, int(np.searchsorted(month_edges_years, b, side="left")))
+
+        for j in range(j0, j1 + 1):
+            left = max(a, float(month_edges_years[j]))
+            right = min(b, float(month_edges_years[j + 1]))
+            overlap = max(0.0, right - left)
+            if overlap > 0:
+                out[j] += float(mass_t[k]) * overlap / width
+
+    return out
+
+
+def _plot_smith_song_monthly_totals(
+    out_png: Path,
+    *,
+    mesh,
+    events_df: pd.DataFrame,
+    epsg_project: int,
+    times: np.ndarray,
+    YEAR0: float,
+    mu_snap_node: np.ndarray,
+    start_month: str,
+    end_month: str,
+    chunk_size: int = 5000,
+    title: str = "Smith-Song monthly totals: Data vs prediction",
+):
     import matplotlib.pyplot as plt
-    import pandas as pd
-    import numpy as np
 
-    cal_years = YEAR0 + np.asarray(times, float)
+    # Data: direct calendar-month binning from raw event dates, same philosophy as FEM.
+    y_month, month_labels, K_total, K_inside = bin_events_month_total_inside_mesh(
+        mesh=mesh,
+        events_df=events_df,
+        epsg_project=int(epsg_project),
+        start_month=start_month,
+        end_month=end_month,
+        chunk_size=int(chunk_size),
+    )
 
-    def frac_year_to_timestamp(y):
-        year = int(np.floor(y))
-        frac = y - year
-        start = pd.Timestamp(year=year, month=1, day=1)
-        end = pd.Timestamp(year=year + 1, month=1, day=1)
-        return start + pd.Timedelta(days=int(frac * (end - start).days))
+    # Model: aggregate snapshot expected mass to true calendar months.
+    month_edges_years = make_month_edges_years(
+        YEAR0=float(YEAR0),
+        start_month=start_month,
+        end_month=end_month,
+    )
 
-    dates = pd.to_datetime([frac_year_to_timestamp(y) for y in cal_years])
-    month = dates.to_period("M").to_timestamp()
+    mu_total_snap = np.sum(np.asarray(mu_snap_node, float), axis=1)
+    mu_month = _aggregate_snapshot_mass_to_months(
+        mass_t=mu_total_snap,
+        times=np.asarray(times, float),
+        month_edges_years=month_edges_years,
+    )
 
-    df = pd.DataFrame({
-        "month": month,
-        "data": np.sum(counts_snap_node, axis=1),
-        "mu": np.sum(mu_snap_node, axis=1),
-    })
+    x = np.array(month_labels)
 
-    g = df.groupby("month", as_index=True)[["data", "mu"]].sum()
+    print("[DIAG:SS:monthly_plot] ---- monthly totals used in Smith-Song aggregate plot ----")
+    print(f"[DIAG:SS:monthly_plot] start_month={start_month} end_month={end_month}")
+    print(f"[DIAG:SS:monthly_plot] K_total_window={K_total:,} K_inside={K_inside:,}")
+    print(f"[DIAG:SS:monthly_plot] data_sum={float(np.sum(y_month)):.12g}")
+    print(f"[DIAG:SS:monthly_plot] mu_sum={float(np.sum(mu_month)):.12g}")
+    print(
+        "[DIAG:SS:monthly_plot] first_24_months="
+        + ", ".join(f"{pd.Timestamp(m).strftime('%Y-%m')}:{float(v):.6g}" for m, v in list(zip(month_labels, y_month))[:24])
+    )
+    print(
+        "[DIAG:SS:monthly_plot] last_24_months="
+        + ", ".join(f"{pd.Timestamp(m).strftime('%Y-%m')}:{float(v):.6g}" for m, v in list(zip(month_labels, y_month))[-24:])
+    )
 
     fig, ax = plt.subplots(figsize=(13, 6))
-    ax.plot(g.index, g["data"], label="Data")
-    ax.plot(g.index, g["mu"], label="Smith-Song mean")
+    ax.plot(x, y_month.astype(float), label="Data inside mesh")
+    ax.plot(x, mu_month.astype(float), label="Smith-Song mean")
     ax.set_title(title)
     ax.set_xlabel("Month")
     ax.set_ylabel("Count per month")
@@ -177,12 +263,26 @@ class SmithSongDiagnosticRunner:
         start_year = float(self.time_params["start_year"])
 
         t_max_year = int(self.time_params.get("t_max_year", 2023))
-        T_years = float(self.time_params.get("T_years", max(0.0, float(t_max_year + 1) - start_year)))
+
+        # For diagnostics, we need the model prediction grid to cover the full
+        # calendar diagnostic window through Dec 31 of t_max_year.
+        T_needed = max(0.0, float(t_max_year + 1) - start_year)
+
+        # If T_years is provided and longer, keep it; otherwise extend to T_needed.
+        T_requested = float(self.time_params.get("T_years", T_needed))
+        T_years = max(T_requested, T_needed)
 
         epsg = int(self.mesh_params.get("epsg_project", 5070))
 
-        return FEMConfig(tau_years=tau, T_years=T_years, picard_max_iter=int(self.time_params.get("picard_max_iter", 20)), picard_tol=float(self.time_params.get("picard_tol", 1e-8)),
-            verbose=bool(self.fem_verbose), YEAR0=float(start_year), epsg_project=epsg)
+        return FEMConfig(
+            tau_years=tau,
+            T_years=T_years,
+            picard_max_iter=int(self.time_params.get("picard_max_iter", 20)),
+            picard_tol=float(self.time_params.get("picard_tol", 1e-8)),
+            verbose=bool(self.fem_verbose),
+            YEAR0=float(start_year),
+            epsg_project=epsg,
+        )
 
     def build_mesh(self) -> Path:
         """
@@ -278,17 +378,58 @@ class SmithSongDiagnosticRunner:
         self.log(f"smith_song_expected_counts complete ({time.perf_counter() - t0:.3f} s)")
         self.log(f"[mu] total expected snapshot={float(mu_snap_node.sum()):.6g}")
       
+        start_month = f"{int(t_min_year):04d}-01"
+        end_month = f"{int(t_max_year):04d}-12"
+        
         monthly_png = self.fig_dir / f"{st.lower()}_smith_song_monthly_totals_vs_data.png"
-        _plot_smith_song_monthly_totals(out_png=monthly_png, times=stage_pre.fem_cache.times, YEAR0=fem_cfg.YEAR0, counts_snap_node=stage_pre.counts_node, mu_snap_node=mu_snap_node)
+        _plot_smith_song_monthly_totals(
+            out_png=monthly_png,
+            mesh=stage_pre.fem_cache.mesh,
+            events_df=events.raw,
+            epsg_project=fem_cfg.epsg_project,
+            times=stage_pre.fem_cache.times,
+            YEAR0=fem_cfg.YEAR0,
+            mu_snap_node=mu_snap_node,
+            start_month=start_month,
+            end_month=end_month,
+            chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
+        )
         self.log("_plot_smith_song_monthly_totals complete")
       
         # ---------------------------------------------------------------------
         # Aggregate both observed and expected snapshot-node arrays to year-node.
         # This gives diagnostics comparable to FEM yearly plots.
         # ---------------------------------------------------------------------
-        counts_node = aggregate_snapshot_node_to_year_node(stage_pre.counts_node, stage_pre.fem_cache.times, fem_cfg.YEAR0, t_min_year=t_min_year, t_max_year=t_max_year)
-
-        mu_node = aggregate_snapshot_node_to_year_node(mu_snap_node, stage_pre.fem_cache.times, fem_cfg.YEAR0, t_min_year=t_min_year, t_max_year=t_max_year)
+        
+        # Observed data: direct yearly node binning from raw events, same as FEM diagnostics.
+        counts_node, K_total, K_inside, year_labels, min_ts, max_ts = bin_events_year_node(
+            mesh=stage_pre.fem_cache.mesh,
+            events_df=events.raw,
+            epsg_project=fem_cfg.epsg_project,
+            t_min_year=t_min_year,
+            t_max_year=t_max_year,
+            chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
+        )
+        
+        # Model prediction: aggregate Smith-Song snapshot expected counts to the same years.
+        mu_node = aggregate_snapshot_node_to_year_node(
+            mu_snap_node,
+            stage_pre.fem_cache.times,
+            fem_cfg.YEAR0,
+            t_min_year=t_min_year,
+            t_max_year=t_max_year,
+        )
+        
+        self.log("[DIAG:SS:data] ---- yearly node counts after direct event binning ----")
+        self.log(f"[DIAG:SS:data] K_total_window={K_total:,} K_inside={K_inside:,}")
+        self.log(f"[DIAG:SS:data] counts_node_sum={float(np.sum(counts_node)):.12g}")
+        if min_ts is not None and max_ts is not None:
+            self.log(f"[DIAG:SS:data] inside_mesh_date_range={min_ts.date()} -> {max_ts.date()}")
+        year_totals_ss = np.sum(counts_node, axis=1)
+        self.log(
+            "[DIAG:SS:data] year_totals="
+            + ", ".join(f"{int(y)}:{float(v):.6g}" for y, v in zip(year_labels, year_totals_ss))
+        )
 
         if counts_node.shape != mu_node.shape:
             raise RuntimeError(f"Shape mismatch: counts_node {counts_node.shape} vs mu_node {mu_node.shape}")

@@ -13,7 +13,6 @@ import pandas as pd
 
 from fem_utils import (
     FEMConfig,
-    load_mesh_km_from_msh,
     bin_events_year_node,
     bin_events_month_total_inside_mesh,
     make_month_edges_years,
@@ -25,7 +24,7 @@ from fem_utils import (
 )
 
 from mle_utils import (
-    LikelihoodConfig,
+    ScoreConfig,
     load_events_csv,
     precompute_stage_objects,
     build_smith_song_precompute,
@@ -352,16 +351,16 @@ class SmithSongDiagnosticRunner:
         events = load_events_csv(self.events_csv, region_states=state_list, YEAR0=fem_cfg.YEAR0,
             epsg_project=fem_cfg.epsg_project, min_year=float(t_min_year), max_year=float(t_max_year + 1))
 
-        ll_cfg = LikelihoodConfig(
+        score_cfg = ScoreConfig(
             t_min=0.0,
             t_max=float(fem_cfg.T_years),
-            lambda_floor=float(self.time_params.get("lambda_floor", 1e-12)),
+            lambda_floor=float(self.time_params.get("score_lambda_floor", self.time_params.get("lambda_floor", 1e-12))),
             verbose=False,
             normalize_by_events=True,
             finder_chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
         )
 
-        stage_pre = precompute_stage_objects(msh, fem_cfg, events, ll_cfg)
+        stage_pre = precompute_stage_objects(msh, fem_cfg, events, score_cfg)
         self.log(f"precompute_stage_objects complete ({time.perf_counter() - t0:.3f} s)")
         self.log(
             f"[bin] snapshot events={stage_pre.K_total_window:,} "
@@ -373,8 +372,8 @@ class SmithSongDiagnosticRunner:
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
         ss_pre = build_smith_song_precompute(stage_pre, top_k=int(self.time_params.get("ss_top_k", 50)))
-        mu_snap_node = smith_song_expected_counts(stage_pre=stage_pre, theta=self.model_params, ss_pre=ss_pre, t_min=ll_cfg.t_min, t_max=ll_cfg.t_max,
-    eps=1e-300, top_k=int(self.time_params.get("ss_top_k", 50)), kernel_tol=float(self.time_params.get("ss_kernel_tol", 1e-6)), history_mode=self.smith_song_history_mode)
+        mu_snap_node = smith_song_expected_counts(stage_pre=stage_pre, theta=self.model_params, ss_pre=ss_pre, t_min=score_cfg.t_min, t_max=score_cfg.t_max,
+            eps=1e-300, top_k=int(self.time_params.get("ss_top_k", 50)), kernel_tol=float(self.time_params.get("ss_kernel_tol", 1e-6)), history_mode=self.smith_song_history_mode)
         self.log(f"smith_song_expected_counts complete ({time.perf_counter() - t0:.3f} s)")
         self.log(f"[mu] total expected snapshot={float(mu_snap_node.sum()):.6g}")
       

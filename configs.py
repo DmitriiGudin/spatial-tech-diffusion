@@ -53,16 +53,17 @@ default = dict(
         t_max_year=2024,
     ),
     spsa_params=dict(
-        n_iter=2000,
-        a=0.05,
-        c=0.05,
-        gamma=0,
-        grad_clip=200,
-        step_clip=100,
+        n_iter=1000,#n_iter=2000,
+        a=0.02,#a=0.05,
+        c=0.1,#c=0.05,
+        gamma=0.101,#gamma=0,
+        grad_clip=20,#grad_clip=200,
+        step_clip=2,#step_clip=100,
+        n_grad_avg=3, # NEW
     ),
     randomSearch_params=dict(
-        N_0=2000,
-        stages=((40, 50), (5, 400)),
+        N_0=4000,#N_0=2000,
+        stages=((40, 50), (10, 200)),#stages=((40, 50), (5, 400)),
     ),
     fem_verbose=False,
     mesh_verbose=False,
@@ -703,6 +704,370 @@ OH_smith_song_generative = dict(
         "Columbus": [-83.0032, 39.9625],
         "Cincinnati": [-84.5120, 39.1031],
         "Dayton" : [-84.1936, 39.7592]
+    },
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+OH_v2_test = dict(
+    mesh_params=dict(
+        state_list=['OH'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("pos", 1, 1e4)),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2008,
+        t_max_year=2024,
+    ),
+    cities={
+        "Cleveland": [-81.6944, 41.4993],
+        "Columbus": [-83.0032, 39.9625],
+        "Cincinnati": [-84.5120, 39.1031],
+        "Dayton" : [-84.1936, 39.7592]
+    },
+)
+
+OH_v2_SMAPE = dict(
+    mesh_params=dict(
+        state_list=['OH'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2008,
+        t_max_year=2024,
+    ),
+    cities={
+        "Cleveland": [-81.6944, 41.4993],
+        "Columbus": [-83.0032, 39.9625],
+        "Cincinnati": [-84.5120, 39.1031],
+        "Dayton" : [-84.1936, 39.7592]
+    },
+    objective_type='smape'
+)
+
+OH_v2_log1p_rmse = dict(
+    mesh_params=dict(
+        state_list=['OH'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2008,
+        t_max_year=2024,
+    ),
+    cities={
+        "Cleveland": [-81.6944, 41.4993],
+        "Columbus": [-83.0032, 39.9625],
+        "Cincinnati": [-84.5120, 39.1031],
+        "Dayton" : [-84.1936, 39.7592]
+    },
+    objective_type='log1p_rmse'
+)
+
+OH_smith_song_generative_log1p_rmse = dict( # ACTUALLY, CONDITIONAL
+    mesh_params=dict(
+        state_list=['OH'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),          # distance decay
+        lambda_mix=("pos", 1e-5, 1), # innovation probability
+        a_time=("nonneg", 0, 2),         # temporal growth
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2008,
+        t_max_year=2024,
+    ),
+    cities={
+        "Cleveland": [-81.6944, 41.4993],
+        "Columbus": [-83.0032, 39.9625],
+        "Cincinnati": [-84.5120, 39.1031],
+        "Dayton" : [-84.1936, 39.7592]
+    },
+    benchmark_model="smith_song",
+    objective_type='log1p_rmse'
+)
+
+
+TX_v2_log1p_rmse = dict(
+    mesh_params=dict(
+        state_list=['TX'],
+        h_km=15,
+        simplify_km=45, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2008,
+        T_years=15,
+        t_min_year=2008,
+        t_max_year=2023,
+    ),
+    cities={
+        "Dallas": [-96.8089, 32.7792],
+        "Houston": [-95.3701, 29.7601],
+        "San Antonio": [-98.4946, 29.4252],
+        "Austin": [-97.7431, 30.2672],
+        "McAllen": [-98.2300, 26.2034],
+        "El Paso": [-106.4850, 31.7619],
+        "Killeen": [-97.6982, 31.1242],
+        "Corpus Christi": [-97.4030, 27.7964]
+    },
+    objective_type='log1p_rmse'
+)
+
+
+TX_smith_song_generative_log1p_rmse = dict(
+    mesh_params=dict(
+        state_list=['TX'],
+        h_km=15,
+        simplify_km=45, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),          # distance decay
+        lambda_mix=("pos", 1e-5, 1), # innovation probability
+        a_time=("nonneg", 0, 2),         # temporal growth
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2008,
+        T_years=15,
+        t_min_year=2008, #2002
+        t_max_year=2023,
+    ),
+    cities={
+        "Dallas": [-96.8089, 32.7792],
+        "Houston": [-95.3701, 29.7601],
+        "San Antonio": [-98.4946, 29.4252],
+        "Austin": [-97.7431, 30.2672],
+        "McAllen": [-98.2300, 26.2034],
+        "El Paso": [-106.4850, 31.7619],
+        "Killeen": [-97.6982, 31.1242],
+        "Corpus Christi": [-97.4030, 27.7964]
+    },
+    objective_type='log1p_rmse',
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+
+FL_v2_log1p_rmse = dict(
+    mesh_params=dict(
+        state_list=['FL'],
+        h_km=8,
+        simplify_km=24, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2012,
+        T_years=12,
+        t_min_year=2012,
+        t_max_year=2024,
+    ),
+    cities={
+        "Miami": [-80.1918, 25.7617],
+        "Tampa": [-82.4588, 27.9517],
+        "Orlando": [-81.3789, 28.5384],
+        "Jacksonville": [-81.6592, 30.3298]
+    },
+    objective_type='log1p_rmse'
+)
+
+
+FL_smith_song_generative_log1p_rmse = dict(
+    mesh_params=dict(
+        state_list=['FL'],
+        h_km=8,
+        simplify_km=24, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),          # distance decay
+        lambda_mix=("pos", 1e-5, 1), # innovation probability
+        a_time=("nonneg", 0, 2),         # temporal growth
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2012,
+        T_years=12,
+        t_min_year=2012, #2002
+        t_max_year=2024,
+    ),
+    cities={
+        "Miami": [-80.1918, 25.7617],
+        "Tampa": [-82.4588, 27.9517],
+        "Orlando": [-81.3789, 28.5384],
+        "Jacksonville": [-81.6592, 30.3298]
+    },
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+
+NY_v2_log1p_rmse = dict(
+    mesh_params=dict(
+        state_list=['NY'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("pos", 1, 1e4)),
+    time_params=dict(
+        start_year=2004,
+        T_years=20,
+        t_min_year=2004,
+        t_max_year=2024,
+    ),
+    cities={
+        "New York": [-74.0060, 40.7128],
+        "Buffalo": [-78.8789, 42.8869],
+        "Rochester": [-77.6088, 43.1566],
+        "Albany": [-73.7545, 42.6518],
+        "Kiryas Joel": [-74.1679, 41.3420],
+        "Syracuse": [-76.1474, 43.0495] 
+    },
+    objective_type='log1p_rmse'
+)
+
+
+NY_smith_song_generative_log1p_rmse = dict(
+    mesh_params=dict(
+        state_list=['NY'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),          # distance decay
+        lambda_mix=("pos", 1e-5, 1), # innovation probability
+        a_time=("nonneg", 0, 2),         # temporal growth
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2004,
+        T_years=20,
+        t_min_year=2004,
+        t_max_year=2024,
+    ),
+    cities={
+        "New York": [-74.0060, 40.7128],
+        "Buffalo": [-78.8789, 42.8869],
+        "Rochester": [-77.6088, 43.1566],
+        "Albany": [-73.7545, 42.6518],
+        "Kiryas Joel": [-74.1679, 41.3420],
+        "Syracuse": [-76.1474, 43.0495] 
     },
     benchmark_model="smith_song",
     smith_song_history_mode="generative",

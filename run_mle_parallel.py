@@ -75,7 +75,7 @@ def make_base_runner_kwargs_from_configs_default(state_cli: str = "") -> Dict[st
     Build Runner kwargs from configs.default, optionally overriding state_list if --state is provided.
     For MLE runs, Runner expects:
         mesh_params, model_params (MLE priors/ranges), time_params, spsa_params, randomSearch_params,
-        fem_verbose, mesh_verbose, ll_verbose, ll_verbose_freq, cities, base_out (optional).
+        fem_verbose, mesh_verbose, score_verbose, score_verbose_freq, cities, base_out (optional).
     """
     try:
         import configs  # local file
@@ -111,8 +111,8 @@ def make_base_runner_kwargs_from_configs_default(state_cli: str = "") -> Dict[st
         randomSearch_params=randomSearch_params,
         fem_verbose=bool(d.get("fem_verbose", False)),
         mesh_verbose=bool(d.get("mesh_verbose", False)),
-        ll_verbose=bool(d.get("ll_verbose", False)),
-        ll_verbose_freq=int(d.get("ll_verbose_freq", 100)),
+        score_verbose=bool(d.get("score_verbose", False)),
+        score_verbose_freq=int(d.get("score_verbose_freq", 100)),
     )
 
     if "base_out" in d:
@@ -120,6 +120,12 @@ def make_base_runner_kwargs_from_configs_default(state_cli: str = "") -> Dict[st
         
     if "benchmark_model" in d:
         out["benchmark_model"] = d["benchmark_model"]
+        
+    if "smith_song_history_mode" in d:
+        out["smith_song_history_mode"] = d["smith_song_history_mode"]
+
+    if "objective_type" in d:
+        out["objective_type"] = d["objective_type"]
 
     return out
 
@@ -141,7 +147,7 @@ def apply_config_overrides(base_kwargs: Dict[str, Any], cfg: Dict[str, Any]) -> 
     out["randomSearch_params"] = merge_nested_dict(out.get("randomSearch_params", {}), cfg.get("randomSearch_params"))
 
     # Optional top-level keys
-    for k in ["fem_verbose", "mesh_verbose", "ll_verbose", "ll_verbose_freq", "base_out", "benchmark_model", "smith_song_history_mode"]:
+    for k in ["fem_verbose", "mesh_verbose", "score_verbose", "score_verbose_freq", "base_out", "benchmark_model", "smith_song_history_mode", "objective_type"]:
         if k in cfg:
             out[k] = cfg[k]
 
@@ -164,12 +170,12 @@ def _worker_run_one(
     out_folder: str,
     base_kwargs: Dict[str, Any],
     seed_base: int = 12345,
-) -> Tuple[str, float, Dict[str, float]]:
+) -> Tuple[str, float, Dict[str, float], str]:
     """
     Worker entrypoint (must be top-level for Windows spawn).
 
     Returns:
-        (out_folder, ll_best, theta_best)
+        (out_folder, score_best, theta_best)
     """
     # Per-run seeds so parallel runs aren't identical
     rs_seed = int(seed_base + 10_000 * idx + 17)
@@ -189,7 +195,7 @@ def _worker_run_one(
     runner.build_mesh()
     res = runner.run_MLE()
 
-    return out_folder, float(res.ll_best), dict(res.theta_best)
+    return out_folder, float(res.score_best), dict(res.theta_best), str(res.objective_type)
 
 
 # -----------------------------
@@ -246,7 +252,7 @@ def main() -> int:
     states = mesh_params["state_list"]
     print(f"[MAIN] Launching {n_workers} parallel MLE runs: {prefix}1..{prefix}{n_workers} (states={states})")
 
-    results: Dict[str, Tuple[float, Dict[str, float]]] = {}
+    results: Dict[str, Tuple[float, Dict[str, float], str]] = {}
     failures: Dict[str, str] = {}
 
     with ProcessPoolExecutor(max_workers=n_workers, mp_context=mp.get_context("spawn")) as ex:
@@ -257,9 +263,13 @@ def main() -> int:
 
         for fut in as_completed(futs):
             try:
-                out_folder, ll_best, theta_best = fut.result()
-                results[out_folder] = (ll_best, theta_best)
-                print(f"[MAIN] {out_folder} DONE: ll={ll_best:.6e} theta={_fmt_theta_compact(theta_best)}")
+                out_folder, score_best, theta_best, objective_type = fut.result()
+                results[out_folder] = (score_best, theta_best, objective_type)
+                print(
+                    f"[MAIN] {out_folder} DONE: "
+                    f"{objective_type}_score={score_best:.6e} "
+                    f"theta={_fmt_theta_compact(theta_best)}"
+                )
             except Exception as e:
                 msg = f"{type(e).__name__}: {e}"
                 failures[f"job_{len(failures)+1}"] = msg
@@ -269,11 +279,15 @@ def main() -> int:
 
     if results:
         best_folder = max(results.keys(), key=lambda k: results[k][0])
-        best_ll, best_theta = results[best_folder]
+        best_score, best_theta, objective_type = results[best_folder]
         print("\n[MAIN] Summary")
         print(f"[MAIN] Elapsed: {dt:.1f} s")
         print(f"[MAIN] Completed: {len(results)}/{n_workers}")
-        print(f"[MAIN] Best: {best_folder} ll={best_ll:.6e} {_fmt_theta_compact(best_theta)}")
+        print(
+            f"[MAIN] Best: {best_folder} "
+            f"{objective_type}_score={best_score:.6e} "
+            f"{_fmt_theta_compact(best_theta)}"
+        )
 
     if failures:
         print("\n[MAIN] Failures:", file=sys.stderr)

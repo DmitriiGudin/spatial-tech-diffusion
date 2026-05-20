@@ -196,7 +196,7 @@ def load_model_params_from_csv(csv_path: Path, row: int, *, benchmark_model: str
     Load a row of parameters from a CSV and require an EXACT match with:
         expected = model_cfg.core_param_names + model_cfg.param_names + always_params
 
-    - CSV is allowed to contain 'll' (ignored).
+    - CSV is allowed to contain objective/score metadata columns, ignored here.
     - Any missing OR extra parameter column (after allowing always_params) triggers an error.
     """
     df = pd.read_csv(csv_path)
@@ -207,9 +207,20 @@ def load_model_params_from_csv(csv_path: Path, row: int, *, benchmark_model: str
 
     expected = list(expected_param_names_for_benchmark(benchmark_model, model_cfg=model_cfg))
     expected_set = set(expected)
-
-    # Columns present (ignore 'll' only)
-    present_set = set(str(c) for c in df.columns if str(c) != "ll")
+    # Columns present: ignore objective/score metadata columns from MLE output CSVs.
+    metadata_cols = {
+        "ll",                 # old log-likelihood CSVs
+        "score",              # new generic maximized score
+        "objective_type",     # objective used during fitting
+        "loglikelihood",      # displayed objective column
+        "mae_loss",
+        "rmse_loss",
+        "smape_loss",
+        "log1p_mae_loss",
+        "log1p_rmse_loss",
+    }
+    
+    present_set = set(str(c) for c in df.columns if str(c) not in metadata_cols)
 
     missing = sorted(expected_set - present_set)
     extra = sorted(present_set - expected_set)

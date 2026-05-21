@@ -29,6 +29,8 @@ from mle_utils import (
     precompute_stage_objects,
     build_smith_song_precompute,
     smith_song_expected_counts,
+    build_discrete_bass_precompute,
+    discrete_bass_expected_counts,
 )
 
 from mesh_utils import MeshBuildConfig, build_mesh_from_admin1_region
@@ -136,7 +138,7 @@ def _aggregate_snapshot_mass_to_months(
     return out
 
 
-def _plot_smith_song_monthly_totals(
+def _plot_benchmark_monthly_totals(
     out_png: Path,
     *,
     mesh,
@@ -178,17 +180,17 @@ def _plot_smith_song_monthly_totals(
 
     x = np.array(month_labels)
 
-    print("[DIAG:SS:monthly_plot] ---- monthly totals used in Smith-Song aggregate plot ----")
-    print(f"[DIAG:SS:monthly_plot] start_month={start_month} end_month={end_month}")
-    print(f"[DIAG:SS:monthly_plot] K_total_window={K_total:,} K_inside={K_inside:,}")
-    print(f"[DIAG:SS:monthly_plot] data_sum={float(np.sum(y_month)):.12g}")
-    print(f"[DIAG:SS:monthly_plot] mu_sum={float(np.sum(mu_month)):.12g}")
+    print("[DIAG:BENCH:monthly_plot] ---- monthly totals used in Smith-Song aggregate plot ----")
+    print(f"[DIAG:BENCH:monthly_plot] start_month={start_month} end_month={end_month}")
+    print(f"[DIAG:BENCH:monthly_plot] K_total_window={K_total:,} K_inside={K_inside:,}")
+    print(f"[DIAG:BENCH:monthly_plot] data_sum={float(np.sum(y_month)):.12g}")
+    print(f"[DIAG:BENCH:monthly_plot] mu_sum={float(np.sum(mu_month)):.12g}")
     print(
-        "[DIAG:SS:monthly_plot] first_24_months="
+        "[DIAG:BENCH:monthly_plot] first_24_months="
         + ", ".join(f"{pd.Timestamp(m).strftime('%Y-%m')}:{float(v):.6g}" for m, v in list(zip(month_labels, y_month))[:24])
     )
     print(
-        "[DIAG:SS:monthly_plot] last_24_months="
+        "[DIAG:BENCH:monthly_plot] last_24_months="
         + ", ".join(f"{pd.Timestamp(m).strftime('%Y-%m')}:{float(v):.6g}" for m, v in list(zip(month_labels, y_month))[-24:])
     )
 
@@ -381,7 +383,7 @@ class SmithSongDiagnosticRunner:
         end_month = f"{int(t_max_year):04d}-12"
         
         monthly_png = self.fig_dir / f"{st.lower()}_smith_song_monthly_totals_vs_data.png"
-        _plot_smith_song_monthly_totals(
+        _plot_benchmark_monthly_totals(
             out_png=monthly_png,
             mesh=stage_pre.fem_cache.mesh,
             events_df=events.raw,
@@ -393,7 +395,7 @@ class SmithSongDiagnosticRunner:
             end_month=end_month,
             chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
         )
-        self.log("_plot_smith_song_monthly_totals complete")
+        self.log("_plot_benchmark_monthly_totals complete")
       
         # ---------------------------------------------------------------------
         # Aggregate both observed and expected snapshot-node arrays to year-node.
@@ -419,14 +421,14 @@ class SmithSongDiagnosticRunner:
             t_max_year=t_max_year,
         )
         
-        self.log("[DIAG:SS:data] ---- yearly node counts after direct event binning ----")
-        self.log(f"[DIAG:SS:data] K_total_window={K_total:,} K_inside={K_inside:,}")
-        self.log(f"[DIAG:SS:data] counts_node_sum={float(np.sum(counts_node)):.12g}")
+        self.log("[DIAG:BENCH:data] ---- yearly node counts after direct event binning ----")
+        self.log(f"[DIAG:BENCH:data] K_total_window={K_total:,} K_inside={K_inside:,}")
+        self.log(f"[DIAG:BENCH:data] counts_node_sum={float(np.sum(counts_node)):.12g}")
         if min_ts is not None and max_ts is not None:
-            self.log(f"[DIAG:SS:data] inside_mesh_date_range={min_ts.date()} -> {max_ts.date()}")
+            self.log(f"[DIAG:BENCH:data] inside_mesh_date_range={min_ts.date()} -> {max_ts.date()}")
         year_totals_ss = np.sum(counts_node, axis=1)
         self.log(
-            "[DIAG:SS:data] year_totals="
+            "[DIAG:BENCH:data] year_totals="
             + ", ".join(f"{int(y)}:{float(v):.6g}" for y, v in zip(year_labels, year_totals_ss))
         )
 
@@ -511,7 +513,7 @@ class SmithSongDiagnosticRunner:
         self.log("SmithSongDiagnosticRunner.run complete")
 
         return dict(out_folder=self.out_folder, state=st, mesh=str(msh), figures=str(self.fig_dir), benchmark_model="smith_song", smith_song_history_mode=self.smith_song_history_mode, 
-            K_total=int(stage_pre.K_total_window), K_inside=int(stage_pre.K_inside), deviance=float(D_total), pearson_rms=float(R_rms), **metrics)
+            K_total=int(K_total), K_inside=int(K_inside), deviance=float(D_total), pearson_rms=float(R_rms), **metrics)
 
 
 def run_smith_song_diagnostics(
@@ -535,6 +537,285 @@ def run_smith_song_diagnostics(
         model_params=model_params,
         time_params=time_params,
         smith_song_history_mode=str(smith_song_history_mode),
+        fem_verbose=fem_verbose,
+        mesh_verbose=mesh_verbose,
+        cities=dict(cities or {}),
+        years_to_plot=years_to_plot,
+        events_csv=Path(events_csv),
+        events_state_col=str(events_state_col),
+        base_out=Path(base_out),
+    )
+    runner.build_mesh()
+    return runner.run()
+
+
+# =============================================================================
+# Discrete Bass benchmark diagnostics runner
+# =============================================================================
+
+@dataclass
+class DiscreteBassDiagnosticRunner(SmithSongDiagnosticRunner):
+    discrete_bass_history_mode: str = "conditional"
+
+    def run(self) -> Dict[str, Any]:
+        """
+        Runs Discrete Bass benchmark diagnostics and saves comparable plots.
+        """
+        self.fig_dir.mkdir(parents=True, exist_ok=True)
+
+        msh = self.mesh_path()
+        if not msh.exists():
+            raise FileNotFoundError(f"Mesh not found: {msh}. Call build_mesh() first.")
+
+        fem_cfg = self.build_fem_config()
+
+        state_list = list(self.mesh_params["state_list"])
+        if len(state_list) != 1:
+            raise ValueError("DiscreteBassDiagnosticRunner currently expects exactly one state.")
+        st = str(state_list[0]).strip()
+
+        self.log(f"[benchmark] Discrete Bass history_mode={self.discrete_bass_history_mode}")
+
+        t_min_year = int(self.time_params.get("t_min_year", int(np.floor(fem_cfg.YEAR0))))
+        t_max_year = int(self.time_params.get("t_max_year", int(np.floor(fem_cfg.YEAR0 + fem_cfg.T_years))))
+
+        # ---------------------------------------------------------------------
+        # Load events and build StagePrecompute.
+        # ---------------------------------------------------------------------
+        t0 = time.perf_counter()
+        events = load_events_csv(
+            self.events_csv,
+            region_states=state_list,
+            YEAR0=fem_cfg.YEAR0,
+            epsg_project=fem_cfg.epsg_project,
+            min_year=float(t_min_year),
+            max_year=float(t_max_year + 1),
+        )
+
+        score_cfg = ScoreConfig(
+            t_min=0.0,
+            t_max=float(fem_cfg.T_years),
+            lambda_floor=float(self.time_params.get("score_lambda_floor", self.time_params.get("lambda_floor", 1e-12))),
+            verbose=False,
+            normalize_by_events=True,
+            finder_chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
+        )
+
+        stage_pre = precompute_stage_objects(msh, fem_cfg, events, score_cfg)
+        self.log(f"precompute_stage_objects complete ({time.perf_counter() - t0:.3f} s)")
+        self.log(
+            f"[bin] snapshot events={stage_pre.K_total_window:,} "
+            f"inside mesh={stage_pre.K_inside:,} shape={stage_pre.counts_node.shape}"
+        )
+
+        # ---------------------------------------------------------------------
+        # Discrete Bass expected counts on snapshot-node grid
+        # ---------------------------------------------------------------------
+        t0 = time.perf_counter()
+        db_pre = build_discrete_bass_precompute(
+            stage_pre,
+            top_k=int(self.time_params.get("db_top_k", 50)),
+        )
+
+        mu_snap_node = discrete_bass_expected_counts(
+            stage_pre=stage_pre,
+            theta=self.model_params,
+            db_pre=db_pre,
+            t_min=score_cfg.t_min,
+            t_max=score_cfg.t_max,
+            eps=1e-300,
+            top_k=int(self.time_params.get("db_top_k", 50)),
+            kernel_tol=float(self.time_params.get("db_kernel_tol", 1e-6)),
+            history_mode=self.discrete_bass_history_mode,
+        )
+
+        self.log(f"discrete_bass_expected_counts complete ({time.perf_counter() - t0:.3f} s)")
+        self.log(f"[mu] total expected snapshot={float(mu_snap_node.sum()):.6g}")
+
+        # ---------------------------------------------------------------------
+        # Monthly aggregate plot
+        # ---------------------------------------------------------------------
+        start_month = f"{int(t_min_year):04d}-01"
+        end_month = f"{int(t_max_year):04d}-12"
+
+        monthly_png = self.fig_dir / f"{st.lower()}_discrete_bass_monthly_totals_vs_data.png"
+        _plot_benchmark_monthly_totals(
+            out_png=monthly_png,
+            mesh=stage_pre.fem_cache.mesh,
+            events_df=events.raw,
+            epsg_project=fem_cfg.epsg_project,
+            times=stage_pre.fem_cache.times,
+            YEAR0=fem_cfg.YEAR0,
+            mu_snap_node=mu_snap_node,
+            start_month=start_month,
+            end_month=end_month,
+            chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
+            title="Discrete Bass monthly totals: Data vs prediction",
+        )
+        self.log("_plot_benchmark_monthly_totals complete")
+
+        # ---------------------------------------------------------------------
+        # Year-node observed data and prediction
+        # ---------------------------------------------------------------------
+        counts_node, K_total, K_inside, year_labels, min_ts, max_ts = bin_events_year_node(
+            mesh=stage_pre.fem_cache.mesh,
+            events_df=events.raw,
+            epsg_project=fem_cfg.epsg_project,
+            t_min_year=t_min_year,
+            t_max_year=t_max_year,
+            chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
+        )
+
+        mu_node = aggregate_snapshot_node_to_year_node(
+            mu_snap_node,
+            stage_pre.fem_cache.times,
+            fem_cfg.YEAR0,
+            t_min_year=t_min_year,
+            t_max_year=t_max_year,
+        )
+
+        self.log("[DIAG:DB:data] ---- yearly node counts after direct event binning ----")
+        self.log(f"[DIAG:DB:data] K_total_window={K_total:,} K_inside={K_inside:,}")
+        self.log(f"[DIAG:DB:data] counts_node_sum={float(np.sum(counts_node)):.12g}")
+        if min_ts is not None and max_ts is not None:
+            self.log(f"[DIAG:DB:data] inside_mesh_date_range={min_ts.date()} -> {max_ts.date()}")
+        year_totals = np.sum(counts_node, axis=1)
+        self.log(
+            "[DIAG:DB:data] year_totals="
+            + ", ".join(f"{int(y)}:{float(v):.6g}" for y, v in zip(year_labels, year_totals))
+        )
+
+        if counts_node.shape != mu_node.shape:
+            raise RuntimeError(f"Shape mismatch: counts_node {counts_node.shape} vs mu_node {mu_node.shape}")
+
+        self.log(f"[mu] total expected yearly={float(mu_node.sum()):.6g}")
+
+        # ---------------------------------------------------------------------
+        # Diagnostics
+        # ---------------------------------------------------------------------
+        t0 = time.perf_counter()
+        D_total, _ = poisson_deviance(counts_node, mu_node)
+        self.log(f"poisson_deviance complete ({time.perf_counter() - t0:.3f} s)")
+        self.log(f"[deviance] D_total = {D_total:.6e}")
+
+        t0 = time.perf_counter()
+        R = pearson_residuals(counts_node, mu_node, mu_floor=float(self.time_params.get("mu_floor", 1e-12)))
+        self.log(f"pearson_residuals complete ({time.perf_counter() - t0:.3f} s)")
+
+        R_mean = float(np.mean(R))
+        R_mabs = float(np.mean(np.abs(R)))
+        R_rms = float(np.sqrt(np.mean(R ** 2)))
+        self.log(f"[pearson] mean={R_mean:.3e} mean|R|={R_mabs:.3e} rms={R_rms:.3e}")
+
+        metrics = forecast_error_metrics(
+            counts_node,
+            mu_node,
+            eps=float(self.time_params.get("metric_eps", 1e-12)),
+            min_denom=float(self.time_params.get("mape_min_denom", 1.0)),
+        )
+        self.log(
+            "[metrics] "
+            f"MAE={metrics['mae']:.6g} "
+            f"RMSE={metrics['rmse']:.6g} "
+            f"SMAPE={metrics['smape']:.6g} "
+            f"MAPE_nonzero={metrics['mape_nonzero']:.6g} "
+            f"log1p_MAE={metrics['log1p_mae']:.6g} "
+            f"log1p_RMSE={metrics['log1p_rmse']:.6g} "
+            f"total_rel_err={metrics['total_relative_error']:.6g}"
+        )
+
+        # ---------------------------------------------------------------------
+        # Plots
+        # ---------------------------------------------------------------------
+        h_km = float(self.mesh_params["h_km"])
+        years_to_plot = self.years_to_plot
+        if years_to_plot is None:
+            years_to_plot = [
+                t_min_year,
+                t_min_year + 3,
+                t_min_year + 6,
+                t_min_year + 9,
+                t_max_year - 4,
+                t_max_year - 2,
+                t_max_year,
+            ]
+            years_to_plot = sorted({yy for yy in years_to_plot if t_min_year <= yy <= t_max_year})
+
+        for yy in years_to_plot:
+            idx = int(yy - t_min_year)
+            if idx < 0 or idx >= counts_node.shape[0]:
+                self.log(f"[warn] year {yy} out of range for bins; skipping")
+                continue
+
+            y_node = counts_node[idx, :]
+            mu_y = mu_node[idx, :]
+
+            out_png = self.fig_dir / f"{st.lower()}_discrete_bass_data_vs_mu_nodes_{yy}.png"
+            t0 = time.perf_counter()
+            _plot_data_vs_mu_year_nodes_lonlat(
+                msh_path=msh,
+                epsg_project=fem_cfg.epsg_project,
+                out_png=out_png,
+                y_node=y_node,
+                mu_node=mu_y,
+                year=int(yy),
+                h_km=h_km,
+                cities=self.cities,
+            )
+            self.log(f"_plot_data_vs_mu_year_nodes_lonlat complete ({time.perf_counter() - t0:.3f} s)")
+
+            out_png_R = self.fig_dir / f"{st.lower()}_discrete_bass_pearson_residual_nodes_{yy}.png"
+            t0 = time.perf_counter()
+            _plot_pearson_residuals_year_nodes_lonlat(
+                msh_path=msh,
+                epsg_project=fem_cfg.epsg_project,
+                out_png=out_png_R,
+                R_node=R[idx, :],
+                year=int(yy),
+                h_km=h_km,
+                cities=self.cities,
+                vlim_log=float(self.time_params.get("vlim_log", 2.5)),
+            )
+            self.log(f"_plot_pearson_residuals_year_nodes_lonlat complete ({time.perf_counter() - t0:.3f} s)")
+
+        self.log("DiscreteBassDiagnosticRunner.run complete")
+
+        return dict(
+            out_folder=self.out_folder,
+            state=st,
+            mesh=str(msh),
+            figures=str(self.fig_dir),
+            benchmark_model="discrete_bass",
+            discrete_bass_history_mode=self.discrete_bass_history_mode,
+            K_total=int(K_total),
+            K_inside=int(K_inside),
+            deviance=float(D_total),
+            pearson_rms=float(R_rms),
+            **metrics,
+        )
+    
+    
+def run_discrete_bass_diagnostics(
+    out_folder: str,
+    *,
+    mesh_params: Dict[str, Any],
+    model_params: Dict[str, float],
+    time_params: Dict[str, float],
+    fem_verbose: bool = False,
+    mesh_verbose: bool = False,
+    cities: Optional[Dict[str, Sequence[float]]] = None,
+    years_to_plot: Optional[List[int]] = None,
+    events_csv: Path = Path("data") / "processed" / "solar_installations_all.csv",
+    events_state_col: str = "state",
+    base_out: Path = Path("out"),
+    discrete_bass_history_mode: str = "conditional",
+) -> Dict[str, Any]:
+    runner = DiscreteBassDiagnosticRunner(
+        out_folder=out_folder,
+        mesh_params=mesh_params,
+        model_params=model_params,
+        time_params=time_params,
+        discrete_bass_history_mode=str(discrete_bass_history_mode),
         fem_verbose=fem_verbose,
         mesh_verbose=mesh_verbose,
         cities=dict(cities or {}),

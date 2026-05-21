@@ -1008,6 +1008,239 @@ def loglikelihood_smith_song_theta(msh_path: Path, funcs_template: GSBFunctions,
     return float(ll)
 
 
+
+# =============================================================================
+# Discrete Bass benchmark likelihood
+# =============================================================================
+
+@dataclass
+class DiscreteBassPrecompute:
+    neigh_idx: np.ndarray
+    neigh_dist: np.ndarray
+    M_hist: np.ndarray
+    cost_hist: Optional[np.ndarray]
+    trend: Optional[np.ndarray]
+
+    W_theta: Optional[float] = None
+    W: Optional[np.ndarray] = None
+
+    def get_W(self, theta_dist: float, *, kernel_tol: float = 1e-6) -> np.ndarray:
+        theta_dist = float(theta_dist)
+        if self.W is None or self.W_theta is None or float(self.W_theta) != theta_dist:
+            W = np.exp(-theta_dist * self.neigh_dist)
+            W[W < float(kernel_tol)] = 0.0
+            self.W = W
+            self.W_theta = theta_dist
+        return self.W
+    
+def build_discrete_bass_precompute(stage_pre: StagePrecompute, *, top_k: int = 50) -> DiscreteBassPrecompute:
+    xy = np.asarray(stage_pre.fem_cache.xy_nodes_km, float)
+    N = xy.shape[0]
+    K = min(int(top_k) + 1, N)  # include self temporarily, remove below
+
+    dx = xy[:, None, 0] - xy[None, :, 0]
+    dy = xy[:, None, 1] - xy[None, :, 1]
+    dist_mat = np.sqrt(dx * dx + dy * dy)
+
+    neigh_idx = np.argpartition(dist_mat, kth=K - 1, axis=1)[:, :K]
+    row = np.arange(N)[:, None]
+    neigh_dist_unsorted = dist_mat[row, neigh_idx]
+    order = np.argsort(neigh_dist_unsorted, axis=1)
+
+    neigh_idx = np.take_along_axis(neigh_idx, order, axis=1)
+    neigh_dist = np.take_along_axis(neigh_dist_unsorted, order, axis=1)
+
+    # remove self if it appears first
+    neigh_idx = neigh_idx[:, 1:]
+    neigh_dist = neigh_dist[:, 1:]
+
+    A_nodes = np.asarray(stage_pre.fem_cache.A_nodes, float)
+    rho = np.asarray(stage_pre.fem_cache.rho_total, float)
+    M_hist = np.maximum(rho * A_nodes[None, :], 0.0)
+
+    cost_hist = getattr(stage_pre.fem_cache, "cost_nodes", None)
+    if cost_hist is not None:
+        cost_hist = np.asarray(cost_hist, float)
+
+    trend = getattr(stage_pre.fem_cache, "trend_factor", None)
+    if trend is not None:
+        trend = np.asarray(trend, float)
+
+    return DiscreteBassPrecompute(neigh_idx=np.asarray(neigh_idx, dtype=np.int64), neigh_dist=np.asarray(neigh_dist, float), M_hist=M_hist, cost_hist=cost_hist, trend=trend)
+
+def _discrete_bass_r_nodes_from_pre(db_pre: DiscreteBassPrecompute, theta: Dict[str, float], k: int) -> np.ndarray:
+    r0 = float(theta.get("r0", theta.get("r", 1.0)))
+    r1 = float(theta.get("r1", 0.0))
+    r2 = float(theta.get("r2", 0.0))
+
+    M_k = np.asarray(db_pre.M_hist[k], float)
+
+    tf = 0.0
+    if db_pre.trend is not None:
+        tf = float(db_pre.trend[k])
+
+    if db_pre.cost_hist is None:
+        return np.full_like(M_k, r0 + r2 * tf, dtype=float)
+
+    c_nodes = np.asarray(db_pre.cost_hist[k], float)
+
+    # IMPORTANT: plus sign, per corrected model.
+    return np.maximum(0.0, r0 + r1 * c_nodes + r2 * tf)
+
+def discrete_bass_expected_counts(
+    stage_pre: StagePrecompute,
+    theta: Dict[str, float],
+    db_pre: Optional[DiscreteBassPrecompute] = None,
+    *,
+    t_min: float = 0.0,
+    t_max: float = 25.0,
+    eps: float = 1e-300,
+    top_k: int = 50,
+    kernel_tol: float = 1e-6,
+    history_mode: str = "conditional",
+) -> np.ndarray:
+    if db_pre is None:
+        db_pre = build_discrete_bass_precompute(stage_pre, top_k=top_k)
+
+    history_mode = str(history_mode).lower().strip()
+    if history_mode not in ("conditional", "generative"):
+        raise ValueError("history_mode must be 'conditional' or 'generative'.")
+
+    p = float(theta.get("p", 0.01))
+    q = float(theta.get("q", theta.get("q_I", 0.1)))
+    theta_dist = float(theta.get("theta", theta.get("theta_dist", 0.0)))
+
+    if p < 0.0 or q < 0.0:
+        raise ValueError("Discrete Bass p and q must be nonnegative.")
+    if theta_dist < 0.0 or not np.isfinite(theta_dist):
+        raise ValueError("Discrete Bass theta/theta_dist must be finite and nonnegative.")
+
+    nt = int(stage_pre.nt)
+    N = int(stage_pre.N)
+    dt = float(stage_pre.fem_cache.cfg.tau_years)
+
+    times = np.asarray(stage_pre.fem_cache.times, float)
+    mu = np.zeros((nt, N), dtype=float)
+
+    neigh_idx = db_pre.neigh_idx
+    W = db_pre.get_W(theta_dist, kernel_tol=kernel_tol)
+
+    C_prev = np.zeros(N, dtype=float)
+
+    for k in range(nt):
+        counts_k = np.asarray(stage_pre.counts_node[k], float)
+
+        if times[k] < t_min or times[k] > t_max:
+            if history_mode == "conditional":
+                C_prev += counts_k
+            continue
+
+        M_k = np.asarray(db_pre.M_hist[k], float)
+        r_nodes = _discrete_bass_r_nodes_from_pre(db_pre, theta, k)
+        E = np.maximum(M_k * r_nodes, 0.0)
+
+        adopted_frac = C_prev / np.maximum(E, eps)
+        adopted_frac = np.clip(adopted_frac, 0.0, 1.0)
+
+        neigh_frac = adopted_frac[neigh_idx]
+        denom = np.sum(W, axis=1)
+        imitation_pressure = np.sum(W * neigh_frac, axis=1) / np.maximum(denom, eps)
+        imitation_pressure = np.clip(imitation_pressure, 0.0, 1.0)
+
+        susceptible = np.maximum(E - C_prev, 0.0)
+        hazard = p + q * imitation_pressure
+
+        mu[k] = np.maximum(susceptible * hazard * dt, 0.0)
+
+        if history_mode == "conditional":
+            C_prev += counts_k
+        else:
+            C_prev += mu[k]
+
+        # Do not let cumulative adoptions exceed local eventual-adopter mass.
+        C_prev = np.minimum(C_prev, E)
+
+    return np.maximum(mu, eps)
+
+def loglikelihood_discrete_bass_theta(
+    msh_path: Path,
+    funcs_template: GSBFunctions,
+    theta: Dict[str, float],
+    fem_cfg: FEMConfig,
+    stage_pre: StagePrecompute,
+    score_cfg: ScoreConfig,
+    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
+    *,
+    model_cfg: ModelConfig = SSB_CURRENT,
+    discrete_bass_history_mode: str = "conditional",
+) -> float:
+    try:
+        db_pre = getattr(stage_pre, "_discrete_bass_pre", None)
+        if db_pre is None:
+            db_pre = build_discrete_bass_precompute(stage_pre, top_k=int(getattr(stage_pre, "db_top_k", 50)))
+            setattr(stage_pre, "_discrete_bass_pre", db_pre)
+
+        mu = discrete_bass_expected_counts(
+            stage_pre=stage_pre,
+            theta=theta,
+            db_pre=db_pre,
+            t_min=score_cfg.t_min,
+            t_max=score_cfg.t_max,
+            eps=1e-300,
+            top_k=int(getattr(stage_pre, "db_top_k", 50)),
+            kernel_tol=float(getattr(stage_pre, "db_kernel_tol", 1e-6)),
+            history_mode=discrete_bass_history_mode,
+        )
+    except Exception:
+        return float("-inf")
+
+    phi = float(theta.get("phi", np.inf))
+    return negbin_loglik_counts(counts=stage_pre.counts_node, mu=mu, phi=phi, logfact=stage_pre.counts_logfact,
+        mu_floor=score_cfg.lambda_floor, normalize_by=max(1, stage_pre.K_inside) if score_cfg.normalize_by_events else None)
+
+def objective_discrete_bass_theta(
+    msh_path: Path,
+    funcs_template: GSBFunctions,
+    theta: Dict[str, float],
+    fem_cfg: FEMConfig,
+    stage_pre: StagePrecompute,
+    score_cfg: ScoreConfig,
+    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
+    *,
+    model_cfg: ModelConfig = SSB_CURRENT,
+    objective_type: str = "loglikelihood",
+    discrete_bass_history_mode: str = "conditional",
+) -> float:
+    obj = str(objective_type).lower().strip()
+
+    if obj in ("loglikelihood", "ll", "nb", "negbin"):
+        return loglikelihood_discrete_bass_theta(msh_path, funcs_template, theta, fem_cfg, stage_pre,
+            score_cfg, sync_boxes=sync_boxes, model_cfg=model_cfg, discrete_bass_history_mode=discrete_bass_history_mode)
+
+    try:
+        db_pre = getattr(stage_pre, "_discrete_bass_pre", None)
+        if db_pre is None:
+            db_pre = build_discrete_bass_precompute(stage_pre, top_k=int(getattr(stage_pre, "db_top_k", 50)))
+            setattr(stage_pre, "_discrete_bass_pre", db_pre)
+
+        mu = discrete_bass_expected_counts(
+            stage_pre=stage_pre,
+            theta=theta,
+            db_pre=db_pre,
+            t_min=score_cfg.t_min,
+            t_max=score_cfg.t_max,
+            eps=1e-300,
+            top_k=int(getattr(stage_pre, "db_top_k", 50)),
+            kernel_tol=float(getattr(stage_pre, "db_kernel_tol", 1e-6)),
+            history_mode=discrete_bass_history_mode,
+        )
+
+        return robust_metric_score(stage_pre.counts_node, mu, objective_type=obj)
+
+    except Exception:
+        return float("-inf")
+
+
 # =============================================================================
 # Optimization: SPSA in transformed space + coarse-to-fine schedule
 # =============================================================================
@@ -1685,6 +1918,7 @@ class Runner:
         score_verbose_freq: Optional[int] = None,
         benchmark_model: str = "gsb",
         smith_song_history_mode: str = "conditional",
+        discrete_bass_history_mode: str = "conditional",
         objective_type: str = "loglikelihood",
     ):
         self.out_folder = str(out_folder)
@@ -1743,6 +1977,7 @@ class Runner:
         # benchmark model
         self.benchmark_model = str(benchmark_model).lower().strip()
         self.smith_song_history_mode = str(smith_song_history_mode).lower().strip()
+        self.discrete_bass_history_mode = str(discrete_bass_history_mode).lower().strip()
         
         # objective function
         self.objective_type = str(objective_type).lower().strip()
@@ -1853,6 +2088,8 @@ class Runner:
             self._log("precompute_stage_objects starting")
             stage_pre = precompute_stage_objects(stage.msh_path, stage.fem_cfg, events, score_cfg)
             self._log("precompute_stage_objects complete")
+            stage_pre.db_top_k = int(self.time_params.get("db_top_k", 50))
+            stage_pre.db_kernel_tol = float(self.time_params.get("db_kernel_tol", 1e-6))
             
             if self.benchmark_model in ("gsb", "pde", "fem"):
                 def score_func(*args, **kwargs):
@@ -1860,6 +2097,9 @@ class Runner:
             elif self.benchmark_model in ("smith_song", "smith-song", "smithsong"):
                 def score_func(*args, **kwargs):
                     return objective_smith_song_theta(*args, **kwargs, objective_type=self.objective_type, smith_song_history_mode=self.smith_song_history_mode)
+            elif self.benchmark_model in ("discrete_bass", "discrete-bass", "discretebass"):
+                def score_func(*args, **kwargs):
+                    return objective_discrete_bass_theta(*args, **kwargs, objective_type=self.objective_type, discrete_bass_history_mode=self.discrete_bass_history_mode)
             else:
                 raise ValueError(f"Unknown benchmark_model={self.benchmark_model!r}.")
             self._log(f"optimization objective_type={self.objective_type}")

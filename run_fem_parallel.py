@@ -51,7 +51,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from fem_utils import Runner
 from model_configs import SSB_CURRENT
-from benchmark_utils import run_smith_song_diagnostics
+from benchmark_utils import run_smith_song_diagnostics, run_discrete_bass_diagnostics
 
 
 # -----------------------------
@@ -97,7 +97,7 @@ def make_base_runner_kwargs_from_configs_default(state_cli: str = "") -> Dict[st
     )
 
     # Optional Runner fields that your Runner supports
-    for k in ["base_out", "events_csv", "events_state_col", "years_to_plot", "month_window", "benchmark_model", "smith_song_history_mode"]:
+    for k in ["base_out", "events_csv", "events_state_col", "years_to_plot", "month_window", "benchmark_model", "smith_song_history_mode", "discrete_bass_history_mode"]:
         if k in d:
             out[k] = d[k]
 
@@ -187,6 +187,9 @@ def expected_param_names_for_benchmark(benchmark_model: str, *, model_cfg=SSB_CU
 
     if bm in ("smith_song", "smith-song", "smithsong"):
         return ("theta", "lambda_mix", "a_time", "r0", "r1", "r2", "phi")
+    
+    if bm in ("discrete_bass", "discrete-bass", "discretebass"):
+        return ("p", "q", "theta", "r0", "r1", "r2", "phi")
 
     raise ValueError(f"Unknown benchmark_model={benchmark_model!r}.")
 
@@ -301,7 +304,7 @@ def apply_config_overrides(base_kwargs: Dict[str, Any], cfg: Dict[str, Any]) -> 
     out["time_params"] = merge_nested_dict(out.get("time_params", {}), cfg.get("time_params"))
 
     # Top-level keys (Runner-related)
-    for k in ["fem_verbose", "mesh_verbose", "cities", "base_out", "events_csv", "events_state_col", "years_to_plot", "month_window", "benchmark_model", "smith_song_history_mode"]:
+    for k in ["fem_verbose", "mesh_verbose", "cities", "base_out", "events_csv", "events_state_col", "years_to_plot", "month_window", "benchmark_model", "smith_song_history_mode", "discrete_bass_history_mode"]:
         if k in cfg:
             out[k] = cfg[k]
 
@@ -347,8 +350,25 @@ def _worker_run_one(out_folder: str, base_kwargs: Dict[str, Any], model_params: 
             base_out=Path(kwargs.get("base_out", "out")),
         )
         return out_folder, dict(summary)
+    
+    if benchmark_model in ("discrete_bass", "discrete-bass", "discretebass"):
+        summary = run_discrete_bass_diagnostics(
+            out_folder=out_folder,
+            mesh_params=kwargs["mesh_params"],
+            model_params=kwargs["model_params"],
+            time_params=kwargs["time_params"],
+            discrete_bass_history_mode=str(kwargs.get("discrete_bass_history_mode", "conditional")),
+            fem_verbose=bool(kwargs.get("fem_verbose", False)),
+            mesh_verbose=bool(kwargs.get("mesh_verbose", False)),
+            cities=dict(kwargs.get("cities", {})),
+            years_to_plot=kwargs.get("years_to_plot", None),
+            events_csv=Path(kwargs.get("events_csv", Path("data") / "processed" / "solar_installations_all.csv")),
+            events_state_col=str(kwargs.get("events_state_col", "state")),
+            base_out=Path(kwargs.get("base_out", "out")),
+        )
+        return out_folder, dict(summary)
 
-    raise ValueError(f"Unknown benchmark_model={benchmark_model!r}. Use 'gsb' or 'smith_song'.")
+    raise ValueError(f"Unknown benchmark_model={benchmark_model!r}. Use 'gsb', 'smith_song', or 'discrete_bass'.")
 
 
 # -----------------------------
@@ -463,9 +483,28 @@ def main() -> int:
             base_out=Path(base_kwargs.get("base_out", "out")),
         )
         runner0.build_mesh()
+        
+    elif benchmark_model in ("discrete_bass", "discrete-bass", "discretebass"):
+        from benchmark_utils import DiscreteBassDiagnosticRunner
+
+        runner0 = DiscreteBassDiagnosticRunner(
+            out_folder=first_folder,
+            mesh_params=base_kwargs["mesh_params"],
+            model_params=base_kwargs["model_params"],
+            time_params=base_kwargs["time_params"],
+            discrete_bass_history_mode=str(base_kwargs.get("discrete_bass_history_mode", "conditional")),
+            fem_verbose=bool(base_kwargs.get("fem_verbose", False)),
+            mesh_verbose=bool(base_kwargs.get("mesh_verbose", False)),
+            cities=dict(base_kwargs.get("cities", {})),
+            years_to_plot=base_kwargs.get("years_to_plot", None),
+            events_csv=Path(base_kwargs.get("events_csv", Path("data") / "processed" / "solar_installations_all.csv")),
+            events_state_col=str(base_kwargs.get("events_state_col", "state")),
+            base_out=Path(base_kwargs.get("base_out", "out")),
+        )
+        runner0.build_mesh()
     
     else:
-        raise SystemExit(f"ERROR: Unknown benchmark_model={benchmark_model!r}. Use 'gsb' or 'smith_song'.")
+        raise SystemExit(f"ERROR: Unknown benchmark_model={benchmark_model!r}. Use 'gsb', 'smith_song', or 'discrete_bass'.")
 
     # Build parameter sets
     if levels_str:

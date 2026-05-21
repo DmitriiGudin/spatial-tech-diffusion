@@ -1072,3 +1072,40 @@ NY_smith_song_generative_log1p_rmse = dict(
     benchmark_model="smith_song",
     smith_song_history_mode="generative",
 )
+
+OH_discrete_bass_generative_log1p_rmse = dict(
+    mesh_params=dict(
+        state_list=['OH'],
+        h_km=12, #6
+        simplify_km=36,#18
+    ),
+    mle_model_params=dict(
+        p=("pos", 1e-5, 1),
+        q=("pos", 1e-5, 10),
+        theta=("nonneg", 0, 10),
+        r0=("pos", 0.01, 10),
+        r1=("nonneg", 0, 100),
+        r2=("nonneg", 0, 10),
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2008,
+        t_max_year=2024,
+        tau=0.1
+    ),
+    cities={
+        "Cleveland": [-81.6944, 41.4993],
+        "Columbus": [-83.0032, 39.9625],
+        "Cincinnati": [-84.5120, 39.1031],
+        "Dayton" : [-84.1936, 39.7592]
+    },
+    randomSearch_params=dict(
+        N_0=1000,
+        stages=((25, 25), (10, 50)),#stages=((40, 50), (5, 400)),
+    ),
+    benchmark_model="discrete_bass",
+    discrete_bass_history_mode="generative",
+    objective_type='log1p_rmse'
+)

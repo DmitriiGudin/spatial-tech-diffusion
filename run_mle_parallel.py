@@ -123,6 +123,9 @@ def make_base_runner_kwargs_from_configs_default(state_cli: str = "") -> Dict[st
         
     if "smith_song_history_mode" in d:
         out["smith_song_history_mode"] = d["smith_song_history_mode"]
+        
+    if "discrete_bass_history_mode" in d:
+        out["discrete_bass_history_mode"] = d["discrete_bass_history_mode"]
 
     if "objective_type" in d:
         out["objective_type"] = d["objective_type"]
@@ -147,7 +150,7 @@ def apply_config_overrides(base_kwargs: Dict[str, Any], cfg: Dict[str, Any]) -> 
     out["randomSearch_params"] = merge_nested_dict(out.get("randomSearch_params", {}), cfg.get("randomSearch_params"))
 
     # Optional top-level keys
-    for k in ["fem_verbose", "mesh_verbose", "score_verbose", "score_verbose_freq", "base_out", "benchmark_model", "smith_song_history_mode", "objective_type"]:
+    for k in ["fem_verbose", "mesh_verbose", "score_verbose", "score_verbose_freq", "base_out", "benchmark_model", "smith_song_history_mode", "discrete_bass_history_mode", "objective_type"]:
         if k in cfg:
             out[k] = cfg[k]
 

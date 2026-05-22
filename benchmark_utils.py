@@ -21,6 +21,7 @@ from fem_utils import (
     forecast_error_metrics,
     _plot_data_vs_mu_year_nodes_lonlat,
     _plot_pearson_residuals_year_nodes_lonlat,
+    fit_bass_to_monthly_counts,
 )
 
 from mle_utils import (
@@ -150,7 +151,8 @@ def _plot_benchmark_monthly_totals(
     start_month: str,
     end_month: str,
     chunk_size: int = 5000,
-    title: str = "Smith-Song monthly totals: Data vs prediction",
+    title: str = "Benchmark monthly totals: Data vs prediction",
+    model_label: str = "Benchmark mean",
 ):
     import matplotlib.pyplot as plt
 
@@ -177,6 +179,14 @@ def _plot_benchmark_monthly_totals(
         times=np.asarray(times, float),
         month_edges_years=month_edges_years,
     )
+    
+    p_hat, q_hat, M_hat, bass_month = fit_bass_to_monthly_counts(
+        y_month=y_month,
+        month_edges_years_rel=month_edges_years,
+        p0=0.01,
+        q0=0.1,
+        M0=None,
+    )
 
     x = np.array(month_labels)
 
@@ -196,7 +206,8 @@ def _plot_benchmark_monthly_totals(
 
     fig, ax = plt.subplots(figsize=(13, 6))
     ax.plot(x, y_month.astype(float), label="Data inside mesh")
-    ax.plot(x, mu_month.astype(float), label="Smith-Song mean")
+    ax.plot(x, bass_month.astype(float), label=f"Bass fit (p={p_hat:.3g}, q={q_hat:.3g})")
+    ax.plot(x, mu_month.astype(float), label=model_label)
     ax.set_title(title)
     ax.set_xlabel("Month")
     ax.set_ylabel("Count per month")
@@ -394,6 +405,8 @@ class SmithSongDiagnosticRunner:
             start_month=start_month,
             end_month=end_month,
             chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
+            title="Smith & Song monthly totals: Data vs prediction",
+            model_label="Smith-Song mean",
         )
         self.log("_plot_benchmark_monthly_totals complete")
       
@@ -651,6 +664,7 @@ class DiscreteBassDiagnosticRunner(SmithSongDiagnosticRunner):
             end_month=end_month,
             chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
             title="Discrete Bass monthly totals: Data vs prediction",
+            model_label="Discrete Bass mean",
         )
         self.log("_plot_benchmark_monthly_totals complete")
 

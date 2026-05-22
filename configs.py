@@ -70,6 +70,23 @@ default = dict(
     ll_verbose=False,
     ll_verbose_freq=100,
     cities={},
+    discrete_bass_history_mode="generative",
+    smith_song_history_mode="generative",
+    ml_xgb_params=dict(
+        n_estimators=800,
+        max_depth=5,
+        learning_rate=0.03,
+        subsample=0.85,
+        colsample_bytree=0.85,
+        objective="reg:squarederror",
+        tree_method="hist",
+        random_state=0,
+        n_jobs=-1,
+    ),   
+    ml_history_mode="generative",
+    ml_neighbor_top_k=50,
+    ml_neighbor_theta=0.05,
+    ml_lag_steps=3,
 )
 
 
@@ -1108,4 +1125,30 @@ OH_discrete_bass_generative_log1p_rmse = dict(
     benchmark_model="discrete_bass",
     discrete_bass_history_mode="generative",
     objective_type='log1p_rmse'
+)
+
+OH_ml_generative = dict(
+    mesh_params=dict(
+        state_list=['OH'],
+        h_km=12, #6
+        simplify_km=36,#18
+    ),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2008,
+        t_max_year=2024,
+        tau=1
+    ),
+    ml_train_start_year=2008,
+    ml_train_end_year=2024,
+    ml_test_start_year=2008,
+    ml_test_end_year=2024,
+    cities={
+        "Cleveland": [-81.6944, 41.4993],
+        "Columbus": [-83.0032, 39.9625],
+        "Cincinnati": [-84.5120, 39.1031],
+        "Dayton" : [-84.1936, 39.7592]
+    },
+    benchmark_model="xgboost",
 )

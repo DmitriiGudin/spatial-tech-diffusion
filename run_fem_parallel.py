@@ -52,6 +52,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from fem_utils import Runner
 from model_configs import SSB_CURRENT
 from benchmark_utils import run_smith_song_diagnostics, run_discrete_bass_diagnostics
+from ml_benchmark_utils import run_ml_benchmark, MLBenchmarkRunner
 
 
 # -----------------------------
@@ -97,7 +98,8 @@ def make_base_runner_kwargs_from_configs_default(state_cli: str = "") -> Dict[st
     )
 
     # Optional Runner fields that your Runner supports
-    for k in ["base_out", "events_csv", "events_state_col", "years_to_plot", "month_window", "benchmark_model", "smith_song_history_mode", "discrete_bass_history_mode"]:
+    for k in ["base_out", "events_csv", "events_state_col", "years_to_plot", "month_window", "benchmark_model", "smith_song_history_mode", "discrete_bass_history_mode",
+              "ml_history_mode", "ml_train_start_year", "ml_train_end_year", "ml_test_start_year", "ml_test_end_year", "ml_xgb_params", "ml_neighbor_top_k", "ml_neighbor_theta", "ml_lag_steps",]:
         if k in d:
             out[k] = d[k]
 
@@ -304,7 +306,8 @@ def apply_config_overrides(base_kwargs: Dict[str, Any], cfg: Dict[str, Any]) -> 
     out["time_params"] = merge_nested_dict(out.get("time_params", {}), cfg.get("time_params"))
 
     # Top-level keys (Runner-related)
-    for k in ["fem_verbose", "mesh_verbose", "cities", "base_out", "events_csv", "events_state_col", "years_to_plot", "month_window", "benchmark_model", "smith_song_history_mode", "discrete_bass_history_mode"]:
+    for k in ["fem_verbose", "mesh_verbose", "cities", "base_out", "events_csv", "events_state_col", "years_to_plot", "month_window", "benchmark_model", "smith_song_history_mode", "discrete_bass_history_mode",
+              "ml_history_mode", "ml_train_start_year", "ml_train_end_year", "ml_test_start_year", "ml_test_end_year", "ml_xgb_params", "ml_neighbor_top_k", "ml_neighbor_theta", "ml_lag_steps",]:
         if k in cfg:
             out[k] = cfg[k]
 
@@ -367,8 +370,32 @@ def _worker_run_one(out_folder: str, base_kwargs: Dict[str, Any], model_params: 
             base_out=Path(kwargs.get("base_out", "out")),
         )
         return out_folder, dict(summary)
+    
+    if benchmark_model in ("ml", "xgboost", "xgb"):
+        summary = run_ml_benchmark(
+            out_folder=out_folder,
+            mesh_params=kwargs["mesh_params"],
+            time_params=kwargs["time_params"],
+            train_start_year=int(kwargs["ml_train_start_year"]),
+            train_end_year=int(kwargs["ml_train_end_year"]),
+            test_start_year=int(kwargs["ml_test_start_year"]),
+            test_end_year=int(kwargs["ml_test_end_year"]),
+            ml_history_mode=str(kwargs.get("ml_history_mode", "generative")),
+            fem_verbose=bool(kwargs.get("fem_verbose", False)),
+            mesh_verbose=bool(kwargs.get("mesh_verbose", False)),
+            cities=dict(kwargs.get("cities", {})),
+            years_to_plot=kwargs.get("years_to_plot", None),
+            events_csv=Path(kwargs.get("events_csv", Path("data") / "processed" / "solar_installations_all.csv")),
+            events_state_col=str(kwargs.get("events_state_col", "state")),
+            base_out=Path(kwargs.get("base_out", "out")),
+            xgb_params=kwargs.get("ml_xgb_params", None),
+            neighbor_top_k=int(kwargs.get("ml_neighbor_top_k", 50)),
+            neighbor_theta=float(kwargs.get("ml_neighbor_theta", 0.05)),
+            lag_steps=int(kwargs.get("ml_lag_steps", 3)),
+        )
+        return out_folder, dict(summary)
 
-    raise ValueError(f"Unknown benchmark_model={benchmark_model!r}. Use 'gsb', 'smith_song', or 'discrete_bass'.")
+    raise ValueError(f"Unknown benchmark_model={benchmark_model!r}. Use 'gsb', 'smith_song', 'discrete_bass' or 'xgboost'.")
 
 
 # -----------------------------
@@ -502,12 +529,42 @@ def main() -> int:
             base_out=Path(base_kwargs.get("base_out", "out")),
         )
         runner0.build_mesh()
+        
+    elif benchmark_model in ("ml", "xgboost", "xgb"):
+        runner0 = MLBenchmarkRunner(
+            out_folder=first_folder,
+            mesh_params=base_kwargs["mesh_params"],
+            time_params=base_kwargs["time_params"],
+            train_start_year=int(base_kwargs["ml_train_start_year"]),
+            train_end_year=int(base_kwargs["ml_train_end_year"]),
+            test_start_year=int(base_kwargs["ml_test_start_year"]),
+            test_end_year=int(base_kwargs["ml_test_end_year"]),
+            ml_history_mode=str(base_kwargs.get("ml_history_mode", "generative")),
+            fem_verbose=bool(base_kwargs.get("fem_verbose", False)),
+            mesh_verbose=bool(base_kwargs.get("mesh_verbose", False)),
+            cities=dict(base_kwargs.get("cities", {})),
+            years_to_plot=base_kwargs.get("years_to_plot", None),
+            events_csv=Path(base_kwargs.get("events_csv", Path("data") / "processed" / "solar_installations_all.csv")),
+            events_state_col=str(base_kwargs.get("events_state_col", "state")),
+            base_out=Path(base_kwargs.get("base_out", "out")),
+        )
+    
+        if base_kwargs.get("ml_xgb_params", None):
+            runner0.xgb_params.update(dict(base_kwargs["ml_xgb_params"]))
+    
+        runner0.neighbor_top_k = int(base_kwargs.get("ml_neighbor_top_k", 50))
+        runner0.neighbor_theta = float(base_kwargs.get("ml_neighbor_theta", 0.05))
+        runner0.lag_steps = int(base_kwargs.get("ml_lag_steps", 3))
+    
+        runner0.build_mesh()
     
     else:
-        raise SystemExit(f"ERROR: Unknown benchmark_model={benchmark_model!r}. Use 'gsb', 'smith_song', or 'discrete_bass'.")
+        raise SystemExit(f"ERROR: Unknown benchmark_model={benchmark_model!r}. Use 'gsb', 'smith_song', 'discrete_bass' or 'xgboost'.")
 
     # Build parameter sets
     if levels_str:
+        if benchmark_model in ("ml", "xgboost", "xgb"):
+            raise SystemExit("ERROR: --levels is not used for ML/XGBoost benchmark; it trains directly from data.")
         levels = parse_levels(levels_str)
         base_out = Path(base_kwargs.get("base_out", "out"))
         try:
@@ -516,6 +573,10 @@ def main() -> int:
             print(f"[MAIN] ERROR while loading params via --levels {levels}: {type(e).__name__}: {e}", file=sys.stderr)
             return 2
         print(f"[MAIN] Using --levels={levels}: order={levels[0]} row={levels[1]}")
+    
+    elif benchmark_model in ("ml", "xgboost", "xgb"):
+        param_sets = [{} for _ in range(n_workers)]
+        
     else:
         param_sets = make_param_sets(n_workers, base_kwargs["model_params"])
         print("[MAIN] Using model_params from defaults/config (no --levels)")

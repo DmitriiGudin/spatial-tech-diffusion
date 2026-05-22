@@ -1599,6 +1599,16 @@ def _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol: GSBSolution, funcs: GSBF
         fig.savefig(out_j, dpi=200)
         plt.close(fig)
         
+        data_dir = out_png.parent.parent / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        comparison_csv = data_dir / out_png.with_suffix(".csv").name
+        pd.DataFrame({
+            "month": [pd.Timestamp(m).strftime("%Y-%m") for m in month_labels],
+            "data": np.asarray(y_month, float),
+            "standard_bass": np.asarray(bass_month, float),
+            "GSB": np.asarray(mu_month, float),
+        }).to_csv(comparison_csv, index=False)
+        
 
 # =============================================================================
 # Other diagnostic helpers

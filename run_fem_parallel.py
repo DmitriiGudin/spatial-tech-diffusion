@@ -54,6 +54,20 @@ from model_configs import SSB_CURRENT
 from benchmark_utils import run_smith_song_diagnostics, run_discrete_bass_diagnostics
 from ml_benchmark_utils import run_ml_benchmark, MLBenchmarkRunner
 
+BENCHMARK_ONLY_KWARGS = {
+    "discrete_bass_history_mode",
+    "smith_song_history_mode",
+    "ml_xgb_params",
+    "ml_history_mode",
+    "ml_neighbor_top_k",
+    "ml_neighbor_theta",
+    "ml_lag_steps",
+    "ml_train_start_year",
+    "ml_train_end_year",
+    "ml_test_start_year",
+    "ml_test_end_year",
+}
+
 
 # -----------------------------
 # Defaults
@@ -331,7 +345,11 @@ def _worker_run_one(out_folder: str, base_kwargs: Dict[str, Any], model_params: 
     benchmark_model = str(kwargs.pop("benchmark_model", "gsb")).lower().strip()
 
     if benchmark_model in ("gsb", "pde", "fem"):
-        runner = Runner(out_folder=out_folder, **kwargs)
+        runner_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k not in BENCHMARK_ONLY_KWARGS
+        }
+        runner = Runner(out_folder=out_folder, **runner_kwargs)
         runner.build_mesh()
         summary = runner.run_FEM()
         summary["benchmark_model"] = "gsb"
@@ -487,6 +505,9 @@ def main() -> int:
     if benchmark_model in ("gsb", "pde", "fem"):
         runner0_kwargs = dict(base_kwargs)
         runner0_kwargs.pop("benchmark_model", None)
+        for k in BENCHMARK_ONLY_KWARGS:
+            runner0_kwargs.pop(k, None)
+        
         runner0 = Runner(out_folder=first_folder, **runner0_kwargs)
         runner0.build_mesh()
     

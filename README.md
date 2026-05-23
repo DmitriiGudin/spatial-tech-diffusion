@@ -35,4 +35,4 @@ This will run 8 parallel processes each starting with random search, then multi-
 ```
 python run_fem_parallel.py --n 8 --prefix fl_my_run --config FL -- levels '(0,0)'
 ```
-Once finished, in the same folders you will be able to view a variety of figures.
+Once finished, in the same folders you will be able to view a variety of figures. The script will also print out a variety of performance metrics.

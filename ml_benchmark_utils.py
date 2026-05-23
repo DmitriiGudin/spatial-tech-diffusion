@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, List, Tuple
 
 import time
+import json
 import numpy as np
 import pandas as pd
 
@@ -15,14 +16,12 @@ from xgboost import XGBRegressor
 
 from fem_utils import (
     FEMConfig,
-    build_fem_stage_cache,
     bin_events_year_node,
     poisson_deviance,
     pearson_residuals,
     forecast_error_metrics,
     _plot_data_vs_mu_year_nodes_lonlat,
     _plot_pearson_residuals_year_nodes_lonlat,
-    mesh_nodes_lonlat,
     bin_events_month_total_inside_mesh,
     make_month_edges_years,
     fit_bass_to_monthly_counts,
@@ -30,7 +29,7 @@ from fem_utils import (
 
 from mle_utils import load_events_csv, precompute_stage_objects, ScoreConfig
 from benchmark_utils import aggregate_snapshot_node_to_year_node, _aggregate_snapshot_mass_to_months
-from mesh_utils import MeshBuildConfig, build_mesh_from_admin1_region
+from mesh_utils import MeshBuildConfig, build_mesh_from_admin1_region, make_region_tag
 
 
 def _fmt_hhmmss(seconds: float) -> str:
@@ -388,7 +387,15 @@ class MLBenchmarkRunner:
     def mesh_path(self) -> Path:
         h_km = int(self.mesh_params["h_km"])
         simplify_km = int(self.mesh_params["simplify_km"])
-        return self.mesh_dir / f"{h_km}_{simplify_km}_km.msh"
+    
+        region_tag = make_region_tag(
+            self.mesh_params.get("state_list", []),
+            county_list=self.mesh_params.get("county_list", []),
+            city_list=self.mesh_params.get("city_list", []),
+            digest_len=10,
+        )
+    
+        return self.mesh_dir / f"{region_tag}__h{h_km}_s{simplify_km}_km.msh"
 
     def log(self, msg: str) -> None:
         dt = time.perf_counter() - self._t0
@@ -413,6 +420,20 @@ class MLBenchmarkRunner:
     def build_mesh(self) -> Path:
         self.mesh_dir.mkdir(parents=True, exist_ok=True)
         msh = self.mesh_path()
+        
+        meta_path = msh.with_suffix(".region.json")
+        meta_path.write_text(
+            json.dumps(
+                {
+                    "state_list": list(self.mesh_params.get("state_list", [])),
+                    "county_list": list(self.mesh_params.get("county_list", [])),
+                    "city_list": list(self.mesh_params.get("city_list", [])),
+                    "mesh_file": msh.name,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
         admin1_shp = (
             Path("data") / "raw" / "maps"
@@ -421,6 +442,9 @@ class MLBenchmarkRunner:
         )
 
         state_list = list(self.mesh_params["state_list"])
+        county_list = list(self.mesh_params.get("county_list", []))
+        city_list = list(self.mesh_params.get("city_list", []))
+        county_shp = Path("data") / "raw" / "maps" / "cb_2023_us_county_5m" / "cb_2023_us_county_5m.shp"
         h_km = float(self.mesh_params["h_km"])
         simplify_km = float(self.mesh_params["simplify_km"])
         epsg = int(self.mesh_params.get("epsg_project", 5070))
@@ -431,14 +455,8 @@ class MLBenchmarkRunner:
             self.log(f"mesh exists: {msh.name} (skipping build)")
             return msh
 
-        build_mesh_from_admin1_region(
-            admin1_shp,
-            state_list,
-            msh,
-            cfg,
-            verbose=bool(self.mesh_verbose),
-            model_name=f"{self.out_folder}_mesh_km",
-        )
+        build_mesh_from_admin1_region(admin1_shp, state_list, msh, cfg, verbose=bool(self.mesh_verbose), model_name=f"{self.out_folder}_mesh_km",
+            county_shp=county_shp, county_names=county_list, city_names=city_list)
         return msh
 
     def run(self) -> Dict[str, Any]:
@@ -448,10 +466,11 @@ class MLBenchmarkRunner:
         if not msh.exists():
             raise FileNotFoundError(f"Mesh not found: {msh}. Call build_mesh() first.")
 
-        state_list = list(self.mesh_params["state_list"])
-        if len(state_list) != 1:
-            raise ValueError("MLBenchmarkRunner currently expects exactly one state.")
-        st = str(state_list[0]).strip()
+        state_list = [str(s).strip() for s in self.mesh_params["state_list"] if str(s).strip()]
+        if not state_list:
+            raise ValueError("mesh_params['state_list'] is empty.")
+        
+        st = "_".join(state_list).lower()
 
         fem_cfg = self.build_fem_config()
 

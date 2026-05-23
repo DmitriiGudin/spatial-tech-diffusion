@@ -36,6 +36,7 @@ import pandas as pd
 import math
 import time
 import logging
+import json
 
 from scipy.sparse import csr_matrix, diags
 from scipy.sparse.linalg import spsolve, factorized
@@ -52,6 +53,7 @@ logging.getLogger("skfem").setLevel(logging.ERROR)
 from density_utils import get_batch_nodal_density, get_batch_nodal_cost, _get_mesh_boundary_polygon, _boundary_poly_to_mpl_path
 from model_utils import ModelConfig, GSBFunctions
 from model_configs import SSB_CURRENT
+from mesh_utils import load_mesh_km_from_msh, make_region_tag
 
 
 # =============================================================================
@@ -100,22 +102,6 @@ class FEMConfig:
 # =============================================================================
 # Utilities: mesh IO + coordinate transforms
 # =============================================================================
-
-def load_mesh_km_from_msh(msh_path: Path) -> MeshTri:
-    mi = meshio.read(msh_path)
-
-    tri = None
-    for c in mi.cells:
-        if c.type == "triangle":
-            tri = c.data
-            break
-    if tri is None:
-        raise ValueError("No triangle cells found in .msh.")
-
-    pts = mi.points[:, :2].T
-    t = tri.T.astype(np.int64)
-    return MeshTri(pts, t)
-
 
 def km_to_lonlat_transformer(epsg_project: int) -> Transformer:
     return Transformer.from_crs(f"EPSG:{epsg_project}", "EPSG:4326", always_xy=True)
@@ -804,7 +790,16 @@ def bin_events_year_node(mesh, events_df: pd.DataFrame, epsg_project: int = 5070
         else:
             sel = np.flatnonzero(cand)
 
-        tri_ids = finder(xj[sel], yj[sel]).astype(np.int64)
+        try:
+            tri_ids = finder(xj[sel], yj[sel]).astype(np.int64)
+        except ValueError:
+            tri_ids = -np.ones(sel.shape[0], dtype=np.int64)
+            for jj, loc in enumerate(sel):
+                try:
+                    tri_ids[jj] = int(finder(np.array([xj[loc]]), np.array([yj[loc]]))[0])
+                except ValueError:
+                    tri_ids[jj] = -1
+        
         inside = tri_ids >= 0
         if not np.any(inside):
             continue
@@ -1689,7 +1684,15 @@ class Runner:
     def mesh_path(self) -> Path:
         h_km = int(self.mesh_params["h_km"])
         simplify_km = int(self.mesh_params["simplify_km"])
-        return self.mesh_dir / f"{h_km}_{simplify_km}_km.msh"
+    
+        region_tag = make_region_tag(
+            self.mesh_params.get("state_list", []),
+            county_list=self.mesh_params.get("county_list", []),
+            city_list=self.mesh_params.get("city_list", []),
+            digest_len=10,
+        )
+    
+        return self.mesh_dir / f"{region_tag}__h{h_km}_s{simplify_km}_km.msh"
 
     # ---- logging ----
     def log(self, msg: str) -> None:
@@ -1732,9 +1735,26 @@ class Runner:
 
         self.mesh_dir.mkdir(parents=True, exist_ok=True)
         msh = self.mesh_path()
+        
+        meta_path = msh.with_suffix(".region.json")
+        meta_path.write_text(
+            json.dumps(
+                {
+                    "state_list": list(self.mesh_params.get("state_list", [])),
+                    "county_list": list(self.mesh_params.get("county_list", [])),
+                    "city_list": list(self.mesh_params.get("city_list", [])),
+                    "mesh_file": msh.name,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
         admin1_shp = Path("data") / "raw" / "maps" / "ne_10m_admin_1_states_provinces_lakes" / "ne_10m_admin_1_states_provinces_lakes.shp"
+        county_shp = Path("data") / "raw" / "maps" / "cb_2023_us_county_5m" / "cb_2023_us_county_5m.shp"
         state_list = list(self.mesh_params["state_list"])
+        county_list = list(self.mesh_params.get("county_list", []))
+        city_list = list(self.mesh_params.get("city_list", []))
         h_km = float(self.mesh_params["h_km"])
         simplify_km = float(self.mesh_params["simplify_km"])
         epsg = int(self.mesh_params.get("epsg_project", 5070))
@@ -1747,7 +1767,8 @@ class Runner:
             return msh
 
         t0 = time.perf_counter()
-        build_mesh_from_admin1_region(admin1_shp, state_list, msh, cfg, verbose=bool(self.mesh_verbose), model_name=f"{self.out_folder}_mesh_km")
+        build_mesh_from_admin1_region(admin1_shp, state_list, msh, cfg, verbose=bool(self.mesh_verbose), model_name=f"{self.out_folder}_mesh_km",
+            county_shp=county_shp, county_names=county_list, city_names=city_list)
         self.log(f"build_mesh_from_admin1_region complete ({time.perf_counter() - t0:.3f} s)")
         self.log("self.build_mesh complete")
         return msh
@@ -1788,12 +1809,10 @@ class Runner:
         if self.events_state_col not in events_df.columns:
             raise ValueError(f"events CSV must contain a '{self.events_state_col}' column.")
         
+        state_list = [str(s).strip() for s in self.mesh_params["state_list"]]
         events_df[self.events_state_col] = events_df[self.events_state_col].astype(str).str.strip()
-        state_list = list(self.mesh_params["state_list"])
-        if len(state_list) != 1:
-            raise ValueError("Runner.run_FEM currently expects exactly one state in state_list (for CSV filtering).")
-        st = str(state_list[0]).strip()
-        events_df = events_df.loc[events_df[self.events_state_col] == st].copy()
+        events_df = events_df.loc[events_df[self.events_state_col].isin(state_list)].copy()
+        st = "_".join(state_list)
         
         # --- cost nodes aligned to FEM snapshots (calendar-year proxy) ---
         cal_years = np.asarray(float(fem_cfg.YEAR0) + np.asarray(cache.times, float), float)

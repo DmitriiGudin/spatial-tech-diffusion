@@ -25,13 +25,17 @@ from pyproj import Transformer
 import time
 import logging
 
+import hashlib
+import json
+import re
+
+import meshio
 import gmsh
 from skfem import MeshTri
 logging.getLogger("skfem").setLevel(logging.ERROR)
 
 from contextlib import contextmanager
 
-from fem_utils import load_mesh_km_from_msh
 from density_utils import get_batch_nodal_density, lonlat_to_km, _events_inside_mesh_mask, fetch_cpi_monthly_fred, choose_cpi_base
 
 @contextmanager
@@ -45,6 +49,24 @@ def timed(label: str):
         
 _PROJECTORS: dict[int, Transformer] = {}
 _INV_PROJECTORS: dict[int, Transformer] = {}
+
+_STATE_ABBR_TO_FIPS = {
+    "AL": "01", "AK": "02", "AZ": "04", "AR": "05", "CA": "06",
+    "CO": "08", "CT": "09", "DE": "10", "DC": "11", "FL": "12",
+    "GA": "13", "HI": "15", "ID": "16", "IL": "17", "IN": "18",
+    "IA": "19", "KS": "20", "KY": "21", "LA": "22", "ME": "23",
+    "MD": "24", "MA": "25", "MI": "26", "MN": "27", "MS": "28",
+    "MO": "29", "MT": "30", "NE": "31", "NV": "32", "NH": "33",
+    "NJ": "34", "NM": "35", "NY": "36", "NC": "37", "ND": "38",
+    "OH": "39", "OK": "40", "OR": "41", "PA": "42", "RI": "44",
+    "SC": "45", "SD": "46", "TN": "47", "TX": "48", "UT": "49",
+    "VT": "50", "VA": "51", "WA": "53", "WV": "54", "WI": "55",
+    "WY": "56",
+}
+
+
+def _clean_name(x: str) -> str:
+    return str(x).strip().lower()
 
 # ============================================================
 # Config
@@ -142,6 +164,52 @@ def _project_lonlat_to_km(lon: np.ndarray, lat: np.ndarray, epsg_project: int) -
     return np.asarray(x_m, float) / 1000.0, np.asarray(y_m, float) / 1000.0
 
 
+def make_region_tag(state_list, county_list=None, city_list=None, *, max_visible_counties: int = 0, digest_len: int = 10) -> str:
+    """
+    Stable compact region tag for filenames.
+
+    Examples:
+      TX
+      MD_VA_DC__counties_a13f92c48b
+      TX__counties_9f31b2aa10
+      TX__cities_2c889ab014
+
+    Uses a stable hash of normalized states/counties/cities.
+    """
+    states = [str(s).strip().upper() for s in (state_list or []) if str(s).strip()]
+    counties = [str(c).strip() for c in (county_list or []) if str(c).strip()]
+    cities = [str(c).strip() for c in (city_list or []) if str(c).strip()]
+
+    def norm(x: str) -> str:
+        x = str(x).strip().lower()
+        x = re.sub(r"\s+", " ", x)
+        return x
+
+    payload = {
+        "states": sorted(states),
+        "counties": sorted(norm(c) for c in counties),
+        "cities": sorted(norm(c) for c in cities),
+    }
+
+    digest = hashlib.blake2b(json.dumps(payload, sort_keys=True).encode("utf-8"), digest_size=8).hexdigest()[:int(digest_len)]
+
+    state_part = "_".join(states) if states else "region"
+
+    if cities:
+        return f"{state_part}__cities_{digest}"
+
+    if counties:
+        if max_visible_counties > 0 and len(counties) <= max_visible_counties:
+            visible = "_".join(
+                re.sub(r"[^A-Za-z0-9]+", "_", c).strip("_")
+                for c in counties
+            )
+            return f"{state_part}__county_{visible}_{digest}"
+        return f"{state_part}__counties_{digest}"
+
+    return state_part
+
+
 # ============================================================
 # Admin-1 loading / selection
 # ============================================================
@@ -222,6 +290,113 @@ def build_conus_polygon(admin1_shp: Path) -> Polygon:
         raise ValueError("CONUS union is empty.")
 
     return pick_largest_polygon(geom)
+
+
+# ============================================================
+# County loading / selection
+# ============================================================
+
+def load_us_counties(county_shp: Path) -> gpd.GeoDataFrame:
+    """
+    Load Census county shapefile.
+
+    Expected columns in cb_2023_us_county_5m:
+      - NAME
+      - STATEFP
+      - COUNTYFP
+      - GEOID
+    """
+    gdf = gpd.read_file(county_shp).to_crs("EPSG:4326")
+
+    required = {"NAME", "STATEFP"}
+    missing = required - set(gdf.columns)
+    if missing:
+        raise ValueError(
+            f"County shapefile missing required columns {sorted(missing)}. "
+            f"Available columns: {list(gdf.columns)}"
+        )
+
+    gdf = gdf.copy()
+    gdf["county_name_clean"] = gdf["NAME"].astype(str).map(_clean_name)
+    gdf["STATEFP"] = gdf["STATEFP"].astype(str).str.zfill(2)
+
+    fips_to_abbr = {v: k for k, v in _STATE_ABBR_TO_FIPS.items()}
+    gdf["state_code"] = gdf["STATEFP"].map(fips_to_abbr)
+
+    return gdf
+
+
+def build_region_polygon_from_counties(
+    county_shp: Path,
+    county_names: Iterable[str],
+    state_codes: Optional[Iterable[str]] = None,
+) -> Polygon:
+    """
+    Select counties by NAME, optionally restricted to state_codes.
+
+    Priority rule:
+      state_codes restrict search domain;
+      county_names select inside that domain.
+    """
+    gdf = load_us_counties(county_shp)
+
+    counties = {_clean_name(c) for c in county_names if str(c).strip()}
+    if not counties:
+        raise ValueError("county_names is empty.")
+
+    if state_codes is not None:
+        codes = {str(c).upper().strip() for c in state_codes if str(c).strip()}
+        if codes:
+            gdf = gdf[gdf["state_code"].isin(codes)].copy()
+
+    sel = gdf[gdf["county_name_clean"].isin(counties)].copy()
+
+    if len(sel) == 0:
+        raise ValueError(
+            f"No counties found for county_names={sorted(counties)} "
+            f"within state_codes={list(state_codes) if state_codes is not None else None}."
+        )
+
+    geom = unary_union(sel.geometry.values)
+    if geom.is_empty:
+        raise ValueError("Union of selected counties is empty.")
+
+    return pick_largest_polygon(geom)
+
+
+def build_region_polygon(
+    *,
+    admin1_shp: Path,
+    state_codes: Iterable[str],
+    county_shp: Optional[Path] = None,
+    county_names: Optional[Iterable[str]] = None,
+    city_names: Optional[Iterable[str]] = None,
+) -> Polygon:
+    """
+    Region priority:
+      city_list nonempty   -> currently unsupported, fail loudly
+      county_list nonempty -> counties within state scope
+      otherwise            -> states
+    """
+    city_names = list(city_names or [])
+    county_names = list(county_names or [])
+
+    if city_names:
+        raise NotImplementedError(
+            "city_list is recognized but not implemented yet. "
+            "Use county_list for now."
+        )
+
+    if county_names:
+        if county_shp is None:
+            raise ValueError("county_shp must be provided when county_names is nonempty.")
+        return build_region_polygon_from_counties(
+            county_shp=county_shp,
+            county_names=county_names,
+            state_codes=state_codes,
+        )
+
+    return build_region_polygon_from_states(admin1_shp, state_codes)
 
 
 # ============================================================
@@ -371,11 +546,15 @@ def build_mesh_from_admin1_region(
     cfg: MeshBuildConfig,
     verbose: bool = True,
     model_name: str = "region_mesh_km",
+    *,
+    county_shp: Optional[Path] = None,
+    county_names: Optional[Iterable[str]] = None,
+    city_names: Optional[Iterable[str]] = None,
 ) -> None:
     """
     Build a mesh for a region defined by a list of 2-letter state codes.
     """
-    poly_lonlat = build_region_polygon_from_states(admin1_shp, state_codes)
+    poly_lonlat = build_region_polygon(admin1_shp=admin1_shp, state_codes=state_codes, county_shp=county_shp, county_names=county_names, city_names=city_names)
     poly_km = project_polygon_to_km(poly_lonlat, cfg.epsg_project)
     poly_km = simplify_polygon_km(poly_km, cfg.simplify_km)
     build_mesh_from_polygon_km(poly_km, out_msh, cfg, verbose=verbose, model_name=model_name)
@@ -385,7 +564,6 @@ def build_mesh_from_admin1_region(
 # Plotting (mesh -> lon/lat)
 # ============================================================
 
-import meshio
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 from matplotlib.colors import LogNorm
@@ -431,6 +609,23 @@ def plot_msh_triangles_lonlat(msh_path: Path, out_png: Path, epsg_project: int =
 # ============================================================
 # Population and mesh diagnostics
 # ============================================================
+
+def load_mesh_km_from_msh(msh_path: Path) -> MeshTri:
+    mi = meshio.read(msh_path)
+
+    tri = None
+    for c in mi.cells:
+        if c.type == "triangle":
+            tri = c.data
+            break
+
+    if tri is None:
+        raise ValueError("No triangle cells found in .msh.")
+
+    pts = mi.points[:, :2].T
+    t = tri.T.astype(np.int64)
+    return MeshTri(pts, t)
+
 
 def print_mesh_quality_diagnostics(mesh: MeshTri, *, label: str = "mesh") -> None:
     """
@@ -578,9 +773,12 @@ def print_population_mass_check(
     epsg_project: int = 5070,
     *,
     mesh: Optional[MeshTri] = None,
+    county_shp: Optional[Path] = None,
+    county_names: Optional[Iterable[str]] = None,
+    city_names: Optional[Iterable[str]] = None,
 ) -> None:
     with timed("print_population_mass_check"):
-        poly_lonlat = build_region_polygon_from_states(admin1_shp, state_codes)
+        poly_lonlat = build_region_polygon(admin1_shp=admin1_shp, state_codes=state_codes, county_shp=county_shp, county_names=county_names, city_names=city_names)
         true_pop = true_population_inside_region(poly_lonlat, year=year)
 
         est_pop = estimated_population_integral_on_mesh(
@@ -676,6 +874,9 @@ def plot_triangle_population_comparison(
     *,
     mesh: Optional[MeshTri] = None,
     h_km: Optional[float] = None,   # <-- pass cfg.h_km from caller
+    county_shp: Optional[Path] = None,
+    county_names: Optional[Iterable[str]] = None,
+    city_names: Optional[Iterable[str]] = None,
 ) -> None:
     """
     Two-panel plot:
@@ -718,7 +919,7 @@ def plot_triangle_population_comparison(
         pops_t = _extrapolate_population_vector(POP2010, POP2020, year)
         zip_xy = COORDS_KM
 
-        poly_lonlat = build_region_polygon_from_states(admin1_shp, state_codes)
+        poly_lonlat = build_region_polygon(admin1_shp=admin1_shp, state_codes=state_codes, county_shp=county_shp, county_names=county_names, city_names=city_names)
         poly_zipkm = polygon_lonlat_to_zipkm(poly_lonlat)
         ppoly_zipkm = prep(poly_zipkm)
 
@@ -825,6 +1026,9 @@ def plot_adoptions_vs_costs(
     events_df: pd.DataFrame,
     out_png: Path,
     *,
+    msh_path: Optional[Path] = None,
+    epsg_project: int = 5070,
+    chunk_size: int = 50_000,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     price_col: str = "price",
@@ -862,6 +1066,33 @@ def plot_adoptions_vs_costs(
         df = df[(df[date_col] >= start_dt) & (df[date_col] <= end_dt)].copy()
         if df.empty:
             raise ValueError("No events in requested date window.")
+            
+    # Optional geometric filtering: keep only events inside the actual mesh domain.
+    # This makes the monthly adoption counts consistent with FEM/benchmark diagnostics.
+    if msh_path is not None:
+        if "longitude" not in df.columns or "latitude" not in df.columns:
+            raise ValueError("msh_path was provided, but events_df lacks longitude/latitude columns.")
+    
+        mesh = load_mesh_km_from_msh(Path(msh_path))
+        lon = pd.to_numeric(df["longitude"], errors="coerce")
+        lat = pd.to_numeric(df["latitude"], errors="coerce")
+        ok_xy = lon.notna() & lat.notna()
+    
+        df = df.loc[ok_xy].copy()
+        lon = lon.loc[ok_xy].to_numpy(float)
+        lat = lat.loc[ok_xy].to_numpy(float)
+    
+        inside, _, _, _ = _events_inside_mesh_mask(
+            mesh,
+            lon,
+            lat,
+            epsg_project=int(epsg_project),
+            chunk_size=int(chunk_size),
+        )
+    
+        df = df.loc[inside].copy()
+        if df.empty:
+            raise ValueError("No events inside mesh domain after geometric filtering.")
 
         # Monthly bins (month start)
         m0 = start_dt.to_period("M").to_timestamp()
@@ -872,6 +1103,12 @@ def plot_adoptions_vs_costs(
         ev_month = df[date_col].dt.to_period("M").dt.to_timestamp()
         idx = ((ev_month.dt.year - m0.year) * 12 + (ev_month.dt.month - m0.month)).to_numpy(np.int64)
         counts = np.bincount(idx, minlength=len(months)).astype(float)
+        
+        print(
+            f"[adoptions_vs_costs] monthly count sum={float(counts.sum()):.12g}, "
+            f"n_events_after_filters={len(df):,}, "
+            f"mesh_filtered={msh_path is not None}"
+        )
 
         # --- Price parsing + validity mask (for price stats only) ---
         if price_col not in df.columns:

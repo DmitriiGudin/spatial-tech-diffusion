@@ -62,8 +62,8 @@ default = dict(
         n_grad_avg=3, # NEW
     ),
     randomSearch_params=dict(
-        N_0=4000,#N_0=2000,
-        stages=((40, 50), (10, 200)),#stages=((40, 50), (5, 400)),
+        N_0=1000,#N_0=4000,
+        stages=((25, 25), (10, 50)),#stages=((40, 50), (10, 200)),
     ),
     fem_verbose=False,
     mesh_verbose=False,
@@ -1151,4 +1151,295 @@ OH_ml_generative = dict(
         "Dayton" : [-84.1936, 39.7592]
     },
     benchmark_model="xgboost",
+)
+
+
+TX_Austin_log1p_rmse = dict(
+    mesh_params=dict(
+        state_list=['TX'],
+        county_list=['Travis','Williamson','Hays'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=15,
+        t_min_year=2009,
+        t_max_year=2024,
+    ),
+    cities={"Austin": [-97.7431, 30.2672]},
+    objective_type='log1p_rmse'
+)
+
+
+
+
+DMV_GSB_log1p_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['MD', 'VA', 'DC'],
+        county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=14,
+        t_min_year=2009,
+        t_max_year=2022,
+    ),
+    cities={"Washington DC": [-77.03637, 38.89511]},
+    objective_type='log1p_rmse'
+)
+
+DMV_SmithSong_log1p_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['MD', 'VA', 'DC'],
+        county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),
+        lambda_mix=("pos", 1e-5, 1),
+        a_time=("nonneg", 0, 2),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=14,
+        t_min_year=2009,
+        t_max_year=2022,
+    ),
+    cities={"Washington DC": [-77.03637, 38.89511]},
+    objective_type='log1p_rmse',
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+DMV_DiscreteBass_log1p_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['MD', 'VA', 'DC'],
+        county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        p=("pos", 1e-5, 1),
+        q=("pos", 1e-5, 10),
+        theta=("nonneg", 0, 10),
+        r0=("pos", 0.01, 10),
+        r1=("nonneg", 0, 100),
+        r2=("nonneg", 0, 10),
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=14,
+        t_min_year=2009,
+        t_max_year=2022,
+    ),
+    cities={"Washington DC": [-77.03637, 38.89511]},
+    objective_type='log1p_rmse',
+    benchmark_model="discrete_bass",
+    discrete_bass_history_mode="generative",
+)
+
+DMV_ml_log1p_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['MD', 'VA', 'DC'],
+        county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=14,
+        t_min_year=2009,
+        t_max_year=2022
+    ),
+    ml_train_start_year=2009,
+    ml_train_end_year=2022,
+    ml_test_start_year=2009,
+    ml_test_end_year=2022,
+    cities={"Washington DC": [-77.03637, 38.89511]},
+    benchmark_model="xgboost",
+)
+
+DMV_GSB_log1p_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['MD', 'VA', 'DC'],
+        county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=12,
+        t_min_year=2021,
+        t_max_year=2022,
+    ),
+    cities={"Washington DC": [-77.03637, 38.89511]},
+    objective_type='log1p_rmse'
+)
+
+DMV_SmithSong_log1p_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['MD', 'VA', 'DC'],
+        county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),
+        lambda_mix=("pos", 1e-5, 1),
+        a_time=("nonneg", 0, 2),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=12,
+        t_min_year=2021,
+        t_max_year=2022,
+    ),
+    cities={"Washington DC": [-77.03637, 38.89511]},
+    objective_type='log1p_rmse',
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+DMV_DiscreteBass_log1p_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['MD', 'VA', 'DC'],
+        county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        p=("pos", 1e-5, 1),
+        q=("pos", 1e-5, 10),
+        theta=("nonneg", 0, 10),
+        r0=("pos", 0.01, 10),
+        r1=("nonneg", 0, 100),
+        r2=("nonneg", 0, 10),
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=12,
+        t_min_year=2021,
+        t_max_year=2022,
+    ),
+    cities={"Washington DC": [-77.03637, 38.89511]},
+    objective_type='log1p_rmse',
+    benchmark_model="discrete_bass",
+    discrete_bass_history_mode="generative",
+)
+
+DMV_ml_log1p_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['MD', 'VA', 'DC'],
+        county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=12,
+        t_min_year=2021,
+        t_max_year=2022
+    ),
+    ml_train_start_year=2009,
+    ml_train_end_year=2020,
+    ml_test_start_year=2021,
+    ml_test_end_year=2022,
+    cities={"Washington DC": [-77.03637, 38.89511]},
+    benchmark_model="xgboost",
+)
+
+
+
+
+Chicago_GSB_log1p_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['IL', 'WI'],
+        county_list=['Cook', 'DuPage', 'Kane', 'Lake', 'McHenry', 'Will', 'DeKalb', 'Grundy', 'Kendall', 'Kenosha'],
+        h_km=4,
+        simplify_km=12, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=14,
+        t_min_year=2009,
+        t_max_year=2022,
+    ),
+    cities={"Chicago": [-87.629789, 41.878114]},
+    objective_type='log1p_rmse'
 )

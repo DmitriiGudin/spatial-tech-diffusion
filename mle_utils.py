@@ -15,13 +15,14 @@ import numpy as np
 import pandas as pd
 import time
 import logging
+import json
 
 from skfem import Basis, MeshTri
 logging.getLogger("skfem").setLevel(logging.ERROR)
 from scipy.special import gammaln
 
 from fem_utils import FEMConfig, solve_gsb_fem, build_fem_stage_cache, FEMStageCache
-from mesh_utils import MeshBuildConfig, build_mesh_from_admin1_region
+from mesh_utils import MeshBuildConfig, build_mesh_from_admin1_region, make_region_tag
 from density_utils import _project_lonlat_to_km, get_batch_nodal_cost
 from model_utils import ModelConfig, GSBFunctions
 from model_configs import SSB_CURRENT
@@ -1084,8 +1085,7 @@ def _discrete_bass_r_nodes_from_pre(db_pre: DiscreteBassPrecompute, theta: Dict[
 
     c_nodes = np.asarray(db_pre.cost_hist[k], float)
 
-    # IMPORTANT: plus sign, per corrected model.
-    return np.maximum(0.0, r0 + r1 * c_nodes + r2 * tf)
+    return np.maximum(0.0, r0 - r1 * c_nodes + r2 * tf)
 
 def discrete_bass_expected_counts(
     stage_pre: StagePrecompute,
@@ -1988,7 +1988,15 @@ class Runner:
     def _mesh_filename(self) -> str:
         h = int(round(float(self.mesh_params["h_km"])))
         s = int(round(float(self.mesh_params["simplify_km"])))
-        return f"{h}_{s}_km.msh"
+    
+        region_tag = make_region_tag(
+            self.mesh_params.get("state_list", []),
+            county_list=self.mesh_params.get("county_list", []),
+            city_list=self.mesh_params.get("city_list", []),
+            digest_len=10,
+        )
+    
+        return f"{region_tag}__h{h}_s{s}_km.msh"
 
     def build_mesh(self) -> Path:
         """
@@ -1996,14 +2004,32 @@ class Runner:
         """
         try:
             state_list = list(self.mesh_params["state_list"])
+            county_list = list(self.mesh_params.get("county_list", []))
+            city_list = list(self.mesh_params.get("city_list", []))
+            county_shp = self.base_data_dir / "raw" / "maps" / "cb_2023_us_county_5m" / "cb_2023_us_county_5m.shp"
             h_km = float(self.mesh_params["h_km"])
             simplify_km = float(self.mesh_params["simplify_km"])
 
             cfg = MeshBuildConfig(h_km=h_km, simplify_km=simplify_km, epsg_project=self.epsg_project)
             msh_path = self.mesh_dir / self._mesh_filename()
+            
+            meta_path = msh_path.with_suffix(".region.json")
+            meta_path.write_text(
+                json.dumps(
+                    {
+                        "state_list": list(self.mesh_params.get("state_list", [])),
+                        "county_list": list(self.mesh_params.get("county_list", [])),
+                        "city_list": list(self.mesh_params.get("city_list", [])),
+                        "mesh_file": msh_path.name,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
 
             if not msh_path.exists():
-                build_mesh_from_admin1_region(self.admin1_shp, state_list, msh_path, cfg, verbose=self.mesh_verbose, model_name=f"mesh_{self.out_folder}")
+                build_mesh_from_admin1_region(self.admin1_shp, state_list, msh_path, cfg, verbose=self.mesh_verbose,
+                    model_name=f"mesh_{self.out_folder}", county_shp=county_shp, county_names=county_list, city_names=city_list)
 
             self.msh_path = msh_path
             return msh_path

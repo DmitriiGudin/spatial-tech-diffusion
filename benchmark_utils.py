@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, List
 
 import time
+import json
 import numpy as np
 import pandas as pd
 
@@ -34,7 +35,7 @@ from mle_utils import (
     discrete_bass_expected_counts,
 )
 
-from mesh_utils import MeshBuildConfig, build_mesh_from_admin1_region
+from mesh_utils import MeshBuildConfig, build_mesh_from_admin1_region, make_region_tag
 
 
 # =============================================================================
@@ -153,6 +154,7 @@ def _plot_benchmark_monthly_totals(
     chunk_size: int = 5000,
     title: str = "Benchmark monthly totals: Data vs prediction",
     model_label: str = "Benchmark mean",
+    model_name: str = "Benchmark",
 ):
     import matplotlib.pyplot as plt
 
@@ -226,7 +228,7 @@ def _plot_benchmark_monthly_totals(
         "month": [pd.Timestamp(m).strftime("%Y-%m") for m in month_labels],
         "data": np.asarray(y_month, float),
         "standard_bass": np.asarray(bass_month, float),
-        model_label.split(' ')[:-1]: np.asarray(mu_month, float),
+        str(model_name): np.asarray(mu_month, float),
     }).to_csv(comparison_csv, index=False)
 
 
@@ -274,7 +276,15 @@ class SmithSongDiagnosticRunner:
     def mesh_path(self) -> Path:
         h_km = int(self.mesh_params["h_km"])
         simplify_km = int(self.mesh_params["simplify_km"])
-        return self.mesh_dir / f"{h_km}_{simplify_km}_km.msh"
+    
+        region_tag = make_region_tag(
+            self.mesh_params.get("state_list", []),
+            county_list=self.mesh_params.get("county_list", []),
+            city_list=self.mesh_params.get("city_list", []),
+            digest_len=10,
+        )
+    
+        return self.mesh_dir / f"{region_tag}__h{h_km}_s{simplify_km}_km.msh"
 
     def log(self, msg: str) -> None:
         dt = time.perf_counter() - self._t0
@@ -313,6 +323,20 @@ class SmithSongDiagnosticRunner:
 
         self.mesh_dir.mkdir(parents=True, exist_ok=True)
         msh = self.mesh_path()
+        
+        meta_path = msh.with_suffix(".region.json")
+        meta_path.write_text(
+            json.dumps(
+                {
+                    "state_list": list(self.mesh_params.get("state_list", [])),
+                    "county_list": list(self.mesh_params.get("county_list", [])),
+                    "city_list": list(self.mesh_params.get("city_list", [])),
+                    "mesh_file": msh.name,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
         admin1_shp = (
             Path("data")
@@ -323,6 +347,9 @@ class SmithSongDiagnosticRunner:
         )
 
         state_list = list(self.mesh_params["state_list"])
+        county_list = list(self.mesh_params.get("county_list", []))
+        city_list = list(self.mesh_params.get("city_list", []))
+        county_shp = Path("data") / "raw" / "maps" / "cb_2023_us_county_5m" / "cb_2023_us_county_5m.shp"
         h_km = float(self.mesh_params["h_km"])
         simplify_km = float(self.mesh_params["simplify_km"])
         epsg = int(self.mesh_params.get("epsg_project", 5070))
@@ -334,7 +361,8 @@ class SmithSongDiagnosticRunner:
             return msh
 
         t0 = time.perf_counter()
-        build_mesh_from_admin1_region(admin1_shp, state_list, msh, cfg, verbose=bool(self.mesh_verbose), model_name=f"{self.out_folder}_mesh_km")
+        build_mesh_from_admin1_region(admin1_shp, state_list, msh, cfg, verbose=bool(self.mesh_verbose), model_name=f"{self.out_folder}_mesh_km",
+            county_shp=county_shp, county_names=county_list, city_names=city_list)
         self.log(f"build_mesh_from_admin1_region complete ({time.perf_counter() - t0:.3f} s)")
         return msh
 
@@ -353,10 +381,11 @@ class SmithSongDiagnosticRunner:
 
         fem_cfg = self.build_fem_config()
 
-        state_list = list(self.mesh_params["state_list"])
-        if len(state_list) != 1:
-            raise ValueError("SmithSongDiagnosticRunner currently expects exactly one state.")
-        st = str(state_list[0]).strip()
+        state_list = [str(s).strip() for s in self.mesh_params["state_list"] if str(s).strip()]
+        if not state_list:
+            raise ValueError("mesh_params['state_list'] is empty.")
+        
+        st = "_".join(state_list).lower()
         
         self.log(f"[benchmark] Smith-Song history_mode={self.smith_song_history_mode}")
 
@@ -416,7 +445,8 @@ class SmithSongDiagnosticRunner:
             end_month=end_month,
             chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
             title="Smith & Song monthly totals: Data vs prediction",
-            model_label="Smith-Song mean",
+            model_label="Smith & Song mean",
+            model_name="Smith & Song",
         )
         self.log("_plot_benchmark_monthly_totals complete")
       
@@ -592,10 +622,11 @@ class DiscreteBassDiagnosticRunner(SmithSongDiagnosticRunner):
 
         fem_cfg = self.build_fem_config()
 
-        state_list = list(self.mesh_params["state_list"])
-        if len(state_list) != 1:
-            raise ValueError("DiscreteBassDiagnosticRunner currently expects exactly one state.")
-        st = str(state_list[0]).strip()
+        state_list = [str(s).strip() for s in self.mesh_params["state_list"] if str(s).strip()]
+        if not state_list:
+            raise ValueError("mesh_params['state_list'] is empty.")
+        
+        st = "_".join(state_list).lower()
 
         self.log(f"[benchmark] Discrete Bass history_mode={self.discrete_bass_history_mode}")
 
@@ -675,6 +706,7 @@ class DiscreteBassDiagnosticRunner(SmithSongDiagnosticRunner):
             chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
             title="Discrete Bass monthly totals: Data vs prediction",
             model_label="Discrete Bass mean",
+            model_name="Discrete Bass",
         )
         self.log("_plot_benchmark_monthly_totals complete")
 

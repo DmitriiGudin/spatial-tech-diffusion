@@ -429,11 +429,23 @@ def _events_inside_mesh_mask(mesh, lon: np.ndarray, lat: np.ndarray, epsg_projec
         if idx.size == 0:
             return (tri_ids >= 0), tri_ids, x_km, y_km
 
-    # Chunked finder on candidates only
+    # Chunked finder on candidates only.
+    # skfem may raise ValueError if ANY point in the chunk is outside the mesh,
+    # so fall back to pointwise lookup for that chunk.
     cs = int(chunk_size) if (chunk_size is not None and int(chunk_size) > 0) else idx.size
+    
     for i0 in range(0, idx.size, cs):
         sl = idx[i0:i0 + cs]
-        tri_ids[sl] = finder(x_km[sl], y_km[sl]).astype(np.int64)
+    
+        try:
+            tri_ids[sl] = finder(x_km[sl], y_km[sl]).astype(np.int64)
+    
+        except ValueError:
+            for ii in sl:
+                try:
+                    tri_ids[ii] = int(finder(np.array([x_km[ii]]), np.array([y_km[ii]]))[0])
+                except ValueError:
+                    tri_ids[ii] = -1
 
     inside = tri_ids >= 0
     return inside, tri_ids, x_km, y_km

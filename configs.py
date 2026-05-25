@@ -1190,7 +1190,7 @@ TX_Austin_log1p_rmse = dict(
 
 
 
-DMV_GSB_log1p_rmse_sample = dict(
+DMV_GSB_rmse_sample = dict(
     mesh_params=dict(
         state_list=['MD', 'VA', 'DC'],
         county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
@@ -1220,10 +1220,10 @@ DMV_GSB_log1p_rmse_sample = dict(
         t_max_year=2022,
     ),
     cities={"Washington DC": [-77.03637, 38.89511]},
-    objective_type='log1p_rmse'
+    objective_type='rmse'
 )
 
-DMV_SmithSong_log1p_rmse_sample = dict(
+DMV_SmithSong_rmse_sample = dict(
     mesh_params=dict(
         state_list=['MD', 'VA', 'DC'],
         county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
@@ -1245,12 +1245,12 @@ DMV_SmithSong_log1p_rmse_sample = dict(
         t_max_year=2022,
     ),
     cities={"Washington DC": [-77.03637, 38.89511]},
-    objective_type='log1p_rmse',
+    objective_type='rmse',
     benchmark_model="smith_song",
     smith_song_history_mode="generative",
 )
 
-DMV_DiscreteBass_log1p_rmse_sample = dict(
+DMV_DiscreteBass_rmse_sample = dict(
     mesh_params=dict(
         state_list=['MD', 'VA', 'DC'],
         county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
@@ -1273,12 +1273,12 @@ DMV_DiscreteBass_log1p_rmse_sample = dict(
         t_max_year=2022,
     ),
     cities={"Washington DC": [-77.03637, 38.89511]},
-    objective_type='log1p_rmse',
+    objective_type='rmse',
     benchmark_model="discrete_bass",
     discrete_bass_history_mode="generative",
 )
 
-DMV_ml_log1p_rmse_sample = dict(
+DMV_ml_rmse_sample = dict(
     mesh_params=dict(
         state_list=['MD', 'VA', 'DC'],
         county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
@@ -1299,7 +1299,7 @@ DMV_ml_log1p_rmse_sample = dict(
     benchmark_model="xgboost",
 )
 
-DMV_GSB_log1p_rmse_forecast = dict(
+DMV_GSB_rmse_forecast = dict(
     mesh_params=dict(
         state_list=['MD', 'VA', 'DC'],
         county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
@@ -1329,10 +1329,10 @@ DMV_GSB_log1p_rmse_forecast = dict(
         t_max_year=2022,
     ),
     cities={"Washington DC": [-77.03637, 38.89511]},
-    objective_type='log1p_rmse'
+    objective_type='rmse'
 )
 
-DMV_SmithSong_log1p_rmse_forecast = dict(
+DMV_SmithSong_rmse_forecast = dict(
     mesh_params=dict(
         state_list=['MD', 'VA', 'DC'],
         county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
@@ -1354,12 +1354,12 @@ DMV_SmithSong_log1p_rmse_forecast = dict(
         t_max_year=2022,
     ),
     cities={"Washington DC": [-77.03637, 38.89511]},
-    objective_type='log1p_rmse',
+    objective_type='rmse',
     benchmark_model="smith_song",
     smith_song_history_mode="generative",
 )
 
-DMV_DiscreteBass_log1p_rmse_forecast = dict(
+DMV_DiscreteBass_rmse_forecast = dict(
     mesh_params=dict(
         state_list=['MD', 'VA', 'DC'],
         county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
@@ -1382,12 +1382,12 @@ DMV_DiscreteBass_log1p_rmse_forecast = dict(
         t_max_year=2022,
     ),
     cities={"Washington DC": [-77.03637, 38.89511]},
-    objective_type='log1p_rmse',
+    objective_type='rmse',
     benchmark_model="discrete_bass",
     discrete_bass_history_mode="generative",
 )
 
-DMV_ml_log1p_rmse_forecast = dict(
+DMV_ml_rmse_forecast = dict(
     mesh_params=dict(
         state_list=['MD', 'VA', 'DC'],
         county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
@@ -1411,7 +1411,7 @@ DMV_ml_log1p_rmse_forecast = dict(
 
 
 
-Chicago_GSB_log1p_rmse_sample = dict(
+Chicago_GSB_rmse_sample = dict(
     mesh_params=dict(
         state_list=['IL', 'WI'],
         county_list=['Cook', 'DuPage', 'Kane', 'Lake', 'McHenry', 'Will', 'DeKalb', 'Grundy', 'Kendall', 'Kenosha'],
@@ -1441,10 +1441,10 @@ Chicago_GSB_log1p_rmse_sample = dict(
         t_max_year=2023,
     ),
     cities={"Chicago": [-87.629789, 41.878114]},
-    objective_type='log1p_rmse'
+    objective_type='rmse'
 )
 
-Chicago_SmithSong_log1p_rmse_sample = dict(
+Chicago_SmithSong_rmse_sample = dict(
     mesh_params=dict(
         state_list=['IL', 'WI'],
         county_list=['Cook', 'DuPage', 'Kane', 'Lake', 'McHenry', 'Will', 'DeKalb', 'Grundy', 'Kendall', 'Kenosha'],
@@ -1466,12 +1466,12 @@ Chicago_SmithSong_log1p_rmse_sample = dict(
         t_max_year=2023,
     ),
     cities={"Chicago": [-87.629789, 41.878114]},
-    objective_type='log1p_rmse',
+    objective_type='rmse',
     benchmark_model="smith_song",
     smith_song_history_mode="generative",
 )
 
-Chicago_DiscreteBass_log1p_rmse_sample = dict(
+Chicago_DiscreteBass_rmse_sample = dict(
     mesh_params=dict(
         state_list=['IL', 'WI'],
         county_list=['Cook', 'DuPage', 'Kane', 'Lake', 'McHenry', 'Will', 'DeKalb', 'Grundy', 'Kendall', 'Kenosha'],
@@ -1494,12 +1494,12 @@ Chicago_DiscreteBass_log1p_rmse_sample = dict(
         t_max_year=2023,
     ),
     cities={"Chicago": [-87.629789, 41.878114]},
-    objective_type='log1p_rmse',
+    objective_type='rmse',
     benchmark_model="discrete_bass",
     discrete_bass_history_mode="generative",
 )
 
-Chicago_ml_log1p_rmse_sample = dict(
+Chicago_ml_rmse_sample = dict(
     mesh_params=dict(
         state_list=['IL', 'WI'],
         county_list=['Cook', 'DuPage', 'Kane', 'Lake', 'McHenry', 'Will', 'DeKalb', 'Grundy', 'Kendall', 'Kenosha'],
@@ -1520,7 +1520,7 @@ Chicago_ml_log1p_rmse_sample = dict(
     benchmark_model="xgboost",
 )
 
-Chicago_GSB_log1p_rmse_forecast = dict(
+Chicago_GSB_rmse_forecast = dict(
     mesh_params=dict(
         state_list=['IL', 'WI'],
         county_list=['Cook', 'DuPage', 'Kane', 'Lake', 'McHenry', 'Will', 'DeKalb', 'Grundy', 'Kendall', 'Kenosha'],
@@ -1550,10 +1550,10 @@ Chicago_GSB_log1p_rmse_forecast = dict(
         t_max_year=2023,
     ),
     cities={"Chicago": [-87.629789, 41.878114]},
-    objective_type='log1p_rmse'
+    objective_type='rmse'
 )
 
-Chicago_SmithSong_log1p_rmse_forecast = dict(
+Chicago_SmithSong_rmse_forecast = dict(
     mesh_params=dict(
         state_list=['IL', 'WI'],
         county_list=['Cook', 'DuPage', 'Kane', 'Lake', 'McHenry', 'Will', 'DeKalb', 'Grundy', 'Kendall', 'Kenosha'],
@@ -1575,12 +1575,12 @@ Chicago_SmithSong_log1p_rmse_forecast = dict(
         t_max_year=2023,
     ),
     cities={"Chicago": [-87.629789, 41.878114]},
-    objective_type='log1p_rmse',
+    objective_type='rmse',
     benchmark_model="smith_song",
     smith_song_history_mode="generative",
 )
 
-Chicago_DiscreteBass_log1p_rmse_forecast = dict(
+Chicago_DiscreteBass_rmse_forecast = dict(
     mesh_params=dict(
         state_list=['IL', 'WI'],
         county_list=['Cook', 'DuPage', 'Kane', 'Lake', 'McHenry', 'Will', 'DeKalb', 'Grundy', 'Kendall', 'Kenosha'],
@@ -1603,12 +1603,12 @@ Chicago_DiscreteBass_log1p_rmse_forecast = dict(
         t_max_year=2023,
     ),
     cities={"Chicago": [-87.629789, 41.878114]},
-    objective_type='log1p_rmse',
+    objective_type='rmse',
     benchmark_model="discrete_bass",
     discrete_bass_history_mode="generative",
 )
 
-Chicago_ml_log1p_rmse_forecast = dict(
+Chicago_ml_rmse_forecast = dict(
     mesh_params=dict(
         state_list=['IL', 'WI'],
         county_list=['Cook', 'DuPage', 'Kane', 'Lake', 'McHenry', 'Will', 'DeKalb', 'Grundy', 'Kendall', 'Kenosha'],
@@ -1632,7 +1632,40 @@ Chicago_ml_log1p_rmse_forecast = dict(
 
 
 
-Philadelphia_SmithSong_log1p_rmse_sample = dict(
+Philadelphia_GSB_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['PA', 'NJ', 'DE', 'MD'],
+        county_list=['Philadelphia', 'Montgomery', 'Bucks', 'Chester', 'Delaware', 'Camden', 'Burlington', 'Gloucester', 'Salem', 'New Castle', 'Cecil'],
+        h_km=4,
+        simplify_km=12, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=15,
+        t_min_year=2009,
+        t_max_year=2023,
+    ),
+    cities={"Philadelphia": [-75.165201, 39.952583]},
+    objective_type='rmse'
+)
+
+Philadelphia_SmithSong_rmse_sample = dict(
     mesh_params=dict(
         state_list=['PA', 'NJ', 'DE', 'MD'],
         county_list=['Philadelphia', 'Montgomery', 'Bucks', 'Chester', 'Delaware', 'Camden', 'Burlington', 'Gloucester', 'Salem', 'New Castle', 'Cecil'],
@@ -1648,13 +1681,871 @@ Philadelphia_SmithSong_log1p_rmse_sample = dict(
         a_time=("nonneg", 0, 2),
         phi=("const", 100, 100)),
     time_params=dict(
-        start_year=2019,
-        T_years=5,
-        t_min_year=2019,
+        start_year=2009,
+        T_years=15,
+        t_min_year=2009,
         t_max_year=2023,
     ),
     cities={"Philadelphia": [-75.165201, 39.952583]},
-    objective_type='log1p_rmse',
+    objective_type='rmse',
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+Philadelphia_DiscreteBass_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['PA', 'NJ', 'DE', 'MD'],
+        county_list=['Philadelphia', 'Montgomery', 'Bucks', 'Chester', 'Delaware', 'Camden', 'Burlington', 'Gloucester', 'Salem', 'New Castle', 'Cecil'],
+        h_km=4,
+        simplify_km=12, 
+    ),
+    mle_model_params=dict(
+        p=("pos", 1e-5, 1),
+        q=("pos", 1e-5, 10),
+        theta=("nonneg", 0, 10),
+        r0=("pos", 0.01, 10),
+        r1=("nonneg", 0, 100),
+        r2=("nonneg", 0, 10),
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=15,
+        t_min_year=2009,
+        t_max_year=2023,
+    ),
+    cities={"Philadelphia": [-75.165201, 39.952583]},
+    objective_type='rmse',
+    benchmark_model="discrete_bass",
+    discrete_bass_history_mode="generative",
+)
+
+Philadelphia_ml_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['PA', 'NJ', 'DE', 'MD'],
+        county_list=['Philadelphia', 'Montgomery', 'Bucks', 'Chester', 'Delaware', 'Camden', 'Burlington', 'Gloucester', 'Salem', 'New Castle', 'Cecil'],
+        h_km=4,
+        simplify_km=12, 
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=15,
+        t_min_year=2009,
+        t_max_year=2023,
+    ),
+    ml_train_start_year=2009,
+    ml_train_end_year=2023,
+    ml_test_start_year=2009,
+    ml_test_end_year=2023,
+    cities={"Philadelphia": [-75.165201, 39.952583]},
+    benchmark_model="xgboost",
+)
+
+Philadelphia_GSB_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['PA', 'NJ', 'DE', 'MD'],
+        county_list=['Philadelphia', 'Montgomery', 'Bucks', 'Chester', 'Delaware', 'Camden', 'Burlington', 'Gloucester', 'Salem', 'New Castle', 'Cecil'],
+        h_km=4,
+        simplify_km=12, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=13,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    cities={"Philadelphia": [-75.165201, 39.952583]},
+    objective_type='rmse'
+)
+
+Philadelphia_SmithSong_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['PA', 'NJ', 'DE', 'MD'],
+        county_list=['Philadelphia', 'Montgomery', 'Bucks', 'Chester', 'Delaware', 'Camden', 'Burlington', 'Gloucester', 'Salem', 'New Castle', 'Cecil'],
+        h_km=4,
+        simplify_km=12, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),
+        lambda_mix=("pos", 1e-5, 1),
+        a_time=("nonneg", 0, 2),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=13,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    cities={"Philadelphia": [-75.165201, 39.952583]},
+    objective_type='rmse',
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+Philadelphia_DiscreteBass_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['PA', 'NJ', 'DE', 'MD'],
+        county_list=['Philadelphia', 'Montgomery', 'Bucks', 'Chester', 'Delaware', 'Camden', 'Burlington', 'Gloucester', 'Salem', 'New Castle', 'Cecil'],
+        h_km=4,
+        simplify_km=12, 
+    ),
+    mle_model_params=dict(
+        p=("pos", 1e-5, 1),
+        q=("pos", 1e-5, 10),
+        theta=("nonneg", 0, 10),
+        r0=("pos", 0.01, 10),
+        r1=("nonneg", 0, 100),
+        r2=("nonneg", 0, 10),
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=13,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    cities={"Philadelphia": [-75.165201, 39.952583]},
+    objective_type='rmse',
+    benchmark_model="discrete_bass",
+    discrete_bass_history_mode="generative",
+)
+
+Philadelphia_ml_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['PA', 'NJ', 'DE', 'MD'],
+        county_list=['Philadelphia', 'Montgomery', 'Bucks', 'Chester', 'Delaware', 'Camden', 'Burlington', 'Gloucester', 'Salem', 'New Castle', 'Cecil'],
+        h_km=4,
+        simplify_km=12, 
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=13,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    ml_train_start_year=2009,
+    ml_train_end_year=2021,
+    ml_test_start_year=2022,
+    ml_test_end_year=2023,
+    cities={"Philadelphia": [-75.165201, 39.952583]},
+    benchmark_model="xgboost",
+)
+
+
+
+
+Phoenix_GSB_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['AZ'],
+        county_list=['Maricopa', 'Pinal'],
+        h_km=7,
+        simplify_km=21, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=14,
+        t_min_year=2009,
+        t_max_year=2022,
+    ),
+    cities={"Phoenix": [-112.074036, 33.448376]},
+    objective_type='rmse'
+)
+
+Phoenix_SmithSong_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['AZ'],
+        county_list=['Maricopa', 'Pinal'],
+        h_km=7,
+        simplify_km=21, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),
+        lambda_mix=("pos", 1e-5, 1),
+        a_time=("nonneg", 0, 2),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=14,
+        t_min_year=2009,
+        t_max_year=2022,
+    ),
+    cities={"Phoenix": [-112.074036, 33.448376]},
+    objective_type='rmse',
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+Phoenix_DiscreteBass_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['AZ'],
+        county_list=['Maricopa', 'Pinal'],
+        h_km=7,
+        simplify_km=21, 
+    ),
+    mle_model_params=dict(
+        p=("pos", 1e-5, 1),
+        q=("pos", 1e-5, 10),
+        theta=("nonneg", 0, 10),
+        r0=("pos", 0.01, 10),
+        r1=("nonneg", 0, 100),
+        r2=("nonneg", 0, 10),
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=14,
+        t_min_year=2009,
+        t_max_year=2022,
+    ),
+    cities={"Phoenix": [-112.074036, 33.448376]},
+    objective_type='rmse',
+    benchmark_model="discrete_bass",
+    discrete_bass_history_mode="generative",
+)
+
+Phoenix_ml_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['AZ'],
+        county_list=['Maricopa', 'Pinal'],
+        h_km=7,
+        simplify_km=21, 
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=14,
+        t_min_year=2009,
+        t_max_year=2022,
+    ),
+    ml_train_start_year=2009,
+    ml_train_end_year=2022,
+    ml_test_start_year=2009,
+    ml_test_end_year=2022,
+    cities={"Phoenix": [-112.074036, 33.448376]},
+    benchmark_model="xgboost",
+)
+
+Phoenix_GSB_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['AZ'],
+        county_list=['Maricopa', 'Pinal'],
+        h_km=7,
+        simplify_km=21, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=12,
+        t_min_year=2021,
+        t_max_year=2022,
+    ),
+    cities={"Phoenix": [-112.074036, 33.448376]},
+    objective_type='rmse'
+)
+
+Phoenix_SmithSong_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['AZ'],
+        county_list=['Maricopa', 'Pinal'],
+        h_km=7,
+        simplify_km=21, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),
+        lambda_mix=("pos", 1e-5, 1),
+        a_time=("nonneg", 0, 2),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=12,
+        t_min_year=2021,
+        t_max_year=2022,
+    ),
+    cities={"Phoenix": [-112.074036, 33.448376]},
+    objective_type='rmse',
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+Phoenix_DiscreteBass_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['AZ'],
+        county_list=['Maricopa', 'Pinal'],
+        h_km=7,
+        simplify_km=21, 
+    ),
+    mle_model_params=dict(
+        p=("pos", 1e-5, 1),
+        q=("pos", 1e-5, 10),
+        theta=("nonneg", 0, 10),
+        r0=("pos", 0.01, 10),
+        r1=("nonneg", 0, 100),
+        r2=("nonneg", 0, 10),
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=12,
+        t_min_year=2021,
+        t_max_year=2022,
+    ),
+    cities={"Phoenix": [-112.074036, 33.448376]},
+    objective_type='rmse',
+    benchmark_model="discrete_bass",
+    discrete_bass_history_mode="generative",
+)
+
+Phoenix_ml_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['AZ'],
+        county_list=['Maricopa', 'Pinal'],
+        h_km=7,
+        simplify_km=21, 
+    ),
+    time_params=dict(
+        start_year=2009,
+        T_years=12,
+        t_min_year=2021,
+        t_max_year=2022,
+    ),
+    ml_train_start_year=2009,
+    ml_train_end_year=2020,
+    ml_test_start_year=2021,
+    ml_test_end_year=2022,
+    cities={"Phoenix": [-112.074036, 33.448376]},
+    benchmark_model="xgboost",
+)
+
+
+
+
+NewYork_GSB_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['NY', 'NJ', 'CT', 'PA'],
+        county_list=['Kings', 'New York', 'Queens', 'Bronx', 'Richmond', 'Nassau', 'Suffolk', 'Westchester', 'Rockland', 'Putnam', 'Orange', 'Dutchess', 'Sullivan', 'Ulster', 'Bergen', 'Essex', 
+                     'Hudson', 'Middlesex', 'Morris', 'Passaic', 'Somerset', 'Union', 'Hunterdon', 'Monmouth', 'Ocean', 'Sussex', 'Warren', 'Mercer', 'Fairfield', 'Pike'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2008,
+        t_max_year=2023,
+    ),
+    cities={"New York City": [-74.0060, 40.7128]},
+    objective_type='rmse'
+)
+
+NewYork_SmithSong_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['NY', 'NJ', 'CT', 'PA'],
+        county_list=['Kings', 'New York', 'Queens', 'Bronx', 'Richmond', 'Nassau', 'Suffolk', 'Westchester', 'Rockland', 'Putnam', 'Orange', 'Dutchess', 'Sullivan', 'Ulster', 'Bergen', 'Essex', 
+                     'Hudson', 'Middlesex', 'Morris', 'Passaic', 'Somerset', 'Union', 'Hunterdon', 'Monmouth', 'Ocean', 'Sussex', 'Warren', 'Mercer', 'Fairfield', 'Pike'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),
+        lambda_mix=("pos", 1e-5, 1),
+        a_time=("nonneg", 0, 2),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2008,
+        t_max_year=2023,
+    ),
+    cities={"New York City": [-74.0060, 40.7128]},
+    objective_type='rmse',
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+NewYork_DiscreteBass_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['NY', 'NJ', 'CT', 'PA'],
+        county_list=['Kings', 'New York', 'Queens', 'Bronx', 'Richmond', 'Nassau', 'Suffolk', 'Westchester', 'Rockland', 'Putnam', 'Orange', 'Dutchess', 'Sullivan', 'Ulster', 'Bergen', 'Essex', 
+                     'Hudson', 'Middlesex', 'Morris', 'Passaic', 'Somerset', 'Union', 'Hunterdon', 'Monmouth', 'Ocean', 'Sussex', 'Warren', 'Mercer', 'Fairfield', 'Pike'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        p=("pos", 1e-5, 1),
+        q=("pos", 1e-5, 10),
+        theta=("nonneg", 0, 10),
+        r0=("pos", 0.01, 10),
+        r1=("nonneg", 0, 100),
+        r2=("nonneg", 0, 10),
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2008,
+        t_max_year=2023,
+    ),
+    cities={"New York City": [-74.0060, 40.7128]},
+    objective_type='rmse',
+    benchmark_model="discrete_bass",
+    discrete_bass_history_mode="generative",
+)
+
+NewYork_ml_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['NY', 'NJ', 'CT', 'PA'],
+        county_list=['Kings', 'New York', 'Queens', 'Bronx', 'Richmond', 'Nassau', 'Suffolk', 'Westchester', 'Rockland', 'Putnam', 'Orange', 'Dutchess', 'Sullivan', 'Ulster', 'Bergen', 'Essex', 
+                     'Hudson', 'Middlesex', 'Morris', 'Passaic', 'Somerset', 'Union', 'Hunterdon', 'Monmouth', 'Ocean', 'Sussex', 'Warren', 'Mercer', 'Fairfield', 'Pike'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    time_params=dict(
+        start_year=2008,
+        T_years=16,
+        t_min_year=2008,
+        t_max_year=2023,
+    ),
+    ml_train_start_year=2008,
+    ml_train_end_year=2023,
+    ml_test_start_year=2008,
+    ml_test_end_year=2023,
+    cities={"New York City": [-74.0060, 40.7128]},
+    benchmark_model="xgboost",
+)
+
+NewYork_GSB_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['NY', 'NJ', 'CT', 'PA'],
+        county_list=['Kings', 'New York', 'Queens', 'Bronx', 'Richmond', 'Nassau', 'Suffolk', 'Westchester', 'Rockland', 'Putnam', 'Orange', 'Dutchess', 'Sullivan', 'Ulster', 'Bergen', 'Essex', 
+                     'Hudson', 'Middlesex', 'Morris', 'Passaic', 'Somerset', 'Union', 'Hunterdon', 'Monmouth', 'Ocean', 'Sussex', 'Warren', 'Mercer', 'Fairfield', 'Pike'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2008,
+        T_years=14,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    cities={"New York City": [-74.0060, 40.7128]},
+    objective_type='rmse'
+)
+
+NewYork_SmithSong_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['NY', 'NJ', 'CT', 'PA'],
+        county_list=['Kings', 'New York', 'Queens', 'Bronx', 'Richmond', 'Nassau', 'Suffolk', 'Westchester', 'Rockland', 'Putnam', 'Orange', 'Dutchess', 'Sullivan', 'Ulster', 'Bergen', 'Essex', 
+                     'Hudson', 'Middlesex', 'Morris', 'Passaic', 'Somerset', 'Union', 'Hunterdon', 'Monmouth', 'Ocean', 'Sussex', 'Warren', 'Mercer', 'Fairfield', 'Pike'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),
+        lambda_mix=("pos", 1e-5, 1),
+        a_time=("nonneg", 0, 2),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2008,
+        T_years=14,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    cities={"New York City": [-74.0060, 40.7128]},
+    objective_type='rmse',
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+NewYork_DiscreteBass_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['NY', 'NJ', 'CT', 'PA'],
+        county_list=['Kings', 'New York', 'Queens', 'Bronx', 'Richmond', 'Nassau', 'Suffolk', 'Westchester', 'Rockland', 'Putnam', 'Orange', 'Dutchess', 'Sullivan', 'Ulster', 'Bergen', 'Essex', 
+                     'Hudson', 'Middlesex', 'Morris', 'Passaic', 'Somerset', 'Union', 'Hunterdon', 'Monmouth', 'Ocean', 'Sussex', 'Warren', 'Mercer', 'Fairfield', 'Pike'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    mle_model_params=dict(
+        p=("pos", 1e-5, 1),
+        q=("pos", 1e-5, 10),
+        theta=("nonneg", 0, 10),
+        r0=("pos", 0.01, 10),
+        r1=("nonneg", 0, 100),
+        r2=("nonneg", 0, 10),
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2008,
+        T_years=14,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    cities={"New York City": [-74.0060, 40.7128]},
+    objective_type='rmse',
+    benchmark_model="discrete_bass",
+    discrete_bass_history_mode="generative",
+)
+
+NewYork_ml_log1p_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['NY', 'NJ', 'CT', 'PA'],
+        county_list=['Kings', 'New York', 'Queens', 'Bronx', 'Richmond', 'Nassau', 'Suffolk', 'Westchester', 'Rockland', 'Putnam', 'Orange', 'Dutchess', 'Sullivan', 'Ulster', 'Bergen', 'Essex', 
+                     'Hudson', 'Middlesex', 'Morris', 'Passaic', 'Somerset', 'Union', 'Hunterdon', 'Monmouth', 'Ocean', 'Sussex', 'Warren', 'Mercer', 'Fairfield', 'Pike'],
+        h_km=6,
+        simplify_km=18, 
+    ),
+    time_params=dict(
+        start_year=2008,
+        T_years=14,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    ml_train_start_year=2008,
+    ml_train_end_year=2021,
+    ml_test_start_year=2022,
+    ml_test_end_year=2023,
+    cities={"New York City": [-74.0060, 40.7128]},
+    benchmark_model="xgboost",
+)
+
+
+
+Minneapolis_GSB_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['MN'],
+        county_list=['Anoka', 'Carver', 'Dakota', 'Hennepin', 'Ramsey', 'Scott', 'Washington'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2013,
+        T_years=11,
+        t_min_year=2013,
+        t_max_year=2023,
+    ),
+    cities={"Minneapolis": [-93.264358, 44.977479]},
+    objective_type='rmse'
+)
+
+Minneapolis_SmithSong_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['MN'],
+        county_list=['Anoka', 'Carver', 'Dakota', 'Hennepin', 'Ramsey', 'Scott', 'Washington'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),
+        lambda_mix=("pos", 1e-5, 1),
+        a_time=("nonneg", 0, 2),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2013,
+        T_years=11,
+        t_min_year=2013,
+        t_max_year=2023,
+    ),
+    cities={"Minneapolis": [-93.264358, 44.977479]},
+    objective_type='rmse',
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+Minneapolis_DiscreteBass_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['MN'],
+        county_list=['Anoka', 'Carver', 'Dakota', 'Hennepin', 'Ramsey', 'Scott', 'Washington'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        p=("pos", 1e-5, 1),
+        q=("pos", 1e-5, 10),
+        theta=("nonneg", 0, 10),
+        r0=("pos", 0.01, 10),
+        r1=("nonneg", 0, 100),
+        r2=("nonneg", 0, 10),
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2013,
+        T_years=11,
+        t_min_year=2013,
+        t_max_year=2023,
+    ),
+    cities={"Minneapolis": [-93.264358, 44.977479]},
+    objective_type='rmse',
+    benchmark_model="discrete_bass",
+    discrete_bass_history_mode="generative",
+)
+
+Minneapolis_ml_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['MN'],
+        county_list=['Anoka', 'Carver', 'Dakota', 'Hennepin', 'Ramsey', 'Scott', 'Washington'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    time_params=dict(
+        start_year=2013,
+        T_years=11,
+        t_min_year=2013,
+        t_max_year=2023,
+    ),
+    ml_train_start_year=2013,
+    ml_train_end_year=2023,
+    ml_test_start_year=2013,
+    ml_test_end_year=2023,
+    cities={"Minneapolis": [-93.264358, 44.977479]},
+    benchmark_model="xgboost",
+)
+
+Minneapolis_GSB_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['MN'],
+        county_list=['Anoka', 'Carver', 'Dakota', 'Hennepin', 'Ramsey', 'Scott', 'Washington'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        p=("pos", 1e-5, 1),
+        q_I=("pos", 1e-3, 10),
+        a_I=("nonneg", 0, 10),
+        b_I=("nonneg", 0, 10),
+        c_I=("pos", 0.01, 10),
+        gamma_J1=("pos", 1e-3, 10),
+        gamma_J2=("pos", 1e-3, 10),
+        k_J=("nonneg", 0, 1),
+        D1=("pos", 1, 1e4),
+        D2=("pos", 1, 1e4),
+        S0=("const", 0, 0),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2013,
+        T_years=9,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    cities={"Minneapolis": [-93.264358, 44.977479]},
+    objective_type='rmse'
+)
+
+Minneapolis_SmithSong_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['MN'],
+        county_list=['Anoka', 'Carver', 'Dakota', 'Hennepin', 'Ramsey', 'Scott', 'Washington'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),
+        lambda_mix=("pos", 1e-5, 1),
+        a_time=("nonneg", 0, 2),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2013,
+        T_years=9,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    cities={"Minneapolis": [-93.264358, 44.977479]},
+    objective_type='rmse',
+    benchmark_model="smith_song",
+    smith_song_history_mode="generative",
+)
+
+Minneapolis_DiscreteBass_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['MN'],
+        county_list=['Anoka', 'Carver', 'Dakota', 'Hennepin', 'Ramsey', 'Scott', 'Washington'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        p=("pos", 1e-5, 1),
+        q=("pos", 1e-5, 10),
+        theta=("nonneg", 0, 10),
+        r0=("pos", 0.01, 10),
+        r1=("nonneg", 0, 100),
+        r2=("nonneg", 0, 10),
+        phi=("const", 100, 100),
+    ),
+    time_params=dict(
+        start_year=2013,
+        T_years=9,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    cities={"Minneapolis": [-93.264358, 44.977479]},
+    objective_type='rmse',
+    benchmark_model="discrete_bass",
+    discrete_bass_history_mode="generative",
+)
+
+Minneapolis_ml_rmse_forecast = dict(
+    mesh_params=dict(
+        state_list=['MN'],
+        county_list=['Anoka', 'Carver', 'Dakota', 'Hennepin', 'Ramsey', 'Scott', 'Washington'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    time_params=dict(
+        start_year=2013,
+        T_years=9,
+        t_min_year=2022,
+        t_max_year=2023,
+    ),
+    ml_train_start_year=2013,
+    ml_train_end_year=2021,
+    ml_test_start_year=2022,
+    ml_test_end_year=2023,
+    cities={"Minneapolis": [-93.264358, 44.977479]},
+    benchmark_model="xgboost",
+)
+
+
+
+
+DMV_SmithSong_rmse_sample = dict(
+    mesh_params=dict(
+        state_list=['MD', 'VA', 'DC'],
+        county_list=['District of Columbia', 'Montgomery', 'Prince George', "Prince George's", 'City of Alexandria', 'Falls Church (city)', 'Manassas Park (city)', 'Frederick', 'Charles', 'Fairfax', 'Arlington', 'Londoun', 'Prince William'],
+        h_km=3,
+        simplify_km=9, 
+    ),
+    mle_model_params=dict(
+        r0=("pos", 0.01, 10),
+        r1=("pos", 0.01, 100),
+        r2=("pos", 0.1, 10),
+        theta=("nonneg", 0, 5),
+        lambda_mix=("pos", 1e-5, 1),
+        a_time=("nonneg", 0, 2),
+        phi=("const", 100, 100)),
+    time_params=dict(
+        start_year=2009,
+        T_years=14,
+        t_min_year=2009,
+        t_max_year=2022,
+    ),
+    cities={"Washington DC": [-77.03637, 38.89511]},
+    objective_type='rmse',
     benchmark_model="smith_song",
     smith_song_history_mode="generative",
 )

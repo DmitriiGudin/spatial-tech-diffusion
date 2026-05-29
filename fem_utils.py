@@ -33,7 +33,6 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 import pandas as pd
-import math
 import time
 import logging
 import json
@@ -53,7 +52,14 @@ logging.getLogger("skfem").setLevel(logging.ERROR)
 from density_utils import get_batch_nodal_density, get_batch_nodal_cost, _get_mesh_boundary_polygon, _boundary_poly_to_mpl_path
 from model_utils import ModelConfig, GSBFunctions
 from model_configs import SSB_CURRENT
-from mesh_utils import load_mesh_km_from_msh, make_region_tag
+from mesh_utils import (
+    load_mesh_km_from_msh,
+    make_region_tag,
+    _plot_cities_lonlat,
+    _plot_node_circles_lonlat_single,
+    _signed_log1p_scale,
+    _apply_colorbar_ticklabels,
+)
 
 
 # =============================================================================
@@ -1082,23 +1088,6 @@ def fit_bass_to_monthly_counts(y_month: np.ndarray, month_edges_years_rel: np.nd
 # Plot helpers
 # =============================================================================
 
-def _plot_cities_lonlat(
-    ax,
-    cities: Dict[str, Sequence[float]],
-    marker_size: float = 70.0,
-    text_alpha: float = 0.65,
-    text_dx: float = 0.08,
-    text_dy: float = 0.06,
-):
-    if not cities:
-        return
-    for name, xy in cities.items():
-        if xy is None or len(xy) != 2:
-            continue
-        lon, lat = float(xy[0]), float(xy[1])
-        ax.scatter([lon], [lat], marker="*", s=marker_size, c="red", linewidths=0.0, zorder=5)
-        ax.text(lon + text_dx, lat + text_dy, str(name), color="red", alpha=float(text_alpha), fontsize=10, zorder=6)
-
 
 def _plot_data_vs_mu_year_nodes_lonlat(
     msh_path: Path,
@@ -1185,83 +1174,6 @@ def _plot_data_vs_mu_year_nodes_lonlat(
     plt.close(fig)
 
 
-def _signed_log1p_scale(x: np.ndarray, eps: float = 0.0) -> np.ndarray:
-    x = np.asarray(x, float)
-    return np.sign(x) * np.log1p(np.abs(x) + float(eps))
-
-
-def _plot_node_circles_lonlat_single(
-    msh_path: Path,
-    epsg_project: int,
-    out_png: Path,
-    values: np.ndarray,
-    title: str,
-    h_km: float,
-    cities: Optional[Dict[str, Sequence[float]]] = None,
-    vlim: Optional[float] = None,
-    cbar_label: str = "",
-):
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import Normalize
-    from matplotlib.patches import Ellipse
-    from matplotlib.collections import PatchCollection
-    from matplotlib.ticker import ScalarFormatter
-
-    mi = meshio.read(msh_path)
-
-    inv = Transformer.from_crs(f"EPSG:{epsg_project}", "EPSG:4326", always_xy=True)
-    pts_km = mi.points[:, :2]
-    lon, lat = inv.transform(pts_km[:, 0] * 1000.0, pts_km[:, 1] * 1000.0)
-    lon = np.asarray(lon, float)
-    lat = np.asarray(lat, float)
-
-    vals = np.asarray(values, float)
-
-    finite = vals[np.isfinite(vals)]
-    if finite.size == 0:
-        vmin, vmax = -1.0, 1.0
-    else:
-        if vlim is not None:
-            L = float(max(vlim, 1e-12))
-            vmin, vmax = -L, L
-        else:
-            vmin = float(np.min(finite))
-            vmax = float(np.max(finite))
-            if vmax <= vmin:
-                vmax = vmin + 1.0
-
-    norm = Normalize(vmin=vmin, vmax=vmax)
-
-    r_km = (np.sqrt(3.0) / 4.0) * float(h_km)
-    KM_PER_DEG_LAT = 111.32
-    dy_deg = r_km / KM_PER_DEG_LAT
-    dx_deg = r_km / (KM_PER_DEG_LAT * np.clip(np.cos(np.deg2rad(lat)), 1e-6, None))
-
-    patches = [Ellipse((float(x), float(y)), width=float(2.0 * wx), height=float(2.0 * dy_deg)) for x, y, wx in zip(lon, lat, dx_deg)]
-    pc = PatchCollection(patches, array=vals, norm=norm, linewidths=0.0)
-
-    fig, ax = plt.subplots(1, 1, figsize=(9, 7), constrained_layout=True)
-    ax.add_collection(pc)
-    ax.autoscale_view()
-    _plot_cities_lonlat(ax, cities or {})
-    ax.set_title(title)
-    ax.set_xlabel("Longitude (deg)")
-    ax.set_ylabel("Latitude (deg)")
-    ax.set_aspect("equal", adjustable="box")
-
-    cbar = fig.colorbar(pc, ax=ax, location="right", fraction=0.045, pad=0.02)
-    if cbar_label:
-        cbar.set_label(cbar_label)
-    fmt = ScalarFormatter(useOffset=False)
-    fmt.set_scientific(False)
-    cbar.formatter = fmt
-    cbar.update_ticks()
-
-    out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_png, dpi=200)
-    plt.close(fig)
-
-
 def _plot_pearson_residuals_year_nodes_lonlat(
     msh_path: Path,
     epsg_project: int,
@@ -1313,104 +1225,6 @@ def sample_monthly_counts_nb(mu_month: np.ndarray, phi: float, rng: np.random.Ge
 
     # Integer-shape NB path
     return rng.negative_binomial(n=int(round(n)), p=p).astype(int)
-    
-    
-def _nice_vmax_1digit(M: float) -> float:
-    """
-    Smallest number >= M of the form d * 10^k with d in {1,...,9}.
-    If M <= 0, returns 1.0 (non-degenerate colorbar).
-    """
-    M = float(M)
-    if not np.isfinite(M) or M <= 0.0:
-        return 1.0
-
-    k = int(math.floor(math.log10(M)))
-    s = M / (10.0 ** k)              # in [1, 10)
-    d = int(math.ceil(s - 1e-15))    # avoid floating one-off
-    d = min(max(d, 1), 9)
-    return float(d) * (10.0 ** k)
-
-
-def _fmt_plain_or_phys(x: float) -> str:
-    """
-    Format:
-      - decimal if |x| in [1e-3, 9e2]
-      - otherwise "d×10^k" style (mathtext) with compact mantissa
-    """
-    x = float(x)
-    if not np.isfinite(x):
-        return ""
-    if x == 0.0:
-        return "0"
-
-    ax = abs(x)
-    if 1e-3 <= ax <= 9e2:
-        # decimal, avoid trailing zeros
-        s = f"{x:.6f}".rstrip("0").rstrip(".")
-        return s
-
-    k = int(math.floor(math.log10(ax)))
-    m = x / (10.0 ** k)
-
-    # compact mantissa: 1–3 significant digits, trim zeros
-    m_str = f"{m:.3g}"
-    # enforce e.g. "-0.0006" doesn't happen here
-    return rf"${m_str}\times 10^{{{k}}}$"
-
-
-def _apply_colorbar_format(cbar, vmax: float) -> None:
-    """
-    Use just a few ticks and human-friendly labels.
-    Requirement focus: make max label clean.
-    """
-    vmax = float(vmax)
-    ticks = np.array([0.0, 0.5 * vmax, vmax], dtype=float)
-    cbar.set_ticks(ticks)
-    cbar.set_ticklabels([_fmt_plain_or_phys(t) for t in ticks])    
-    
-    
-def _fmt_plain_or_phys_001_999(x: float) -> str:
-    """
-    If |x| in [1e-3, 9.99e2] => decimal string.
-    Else => mathtext like $4\\times 10^{-3}$.
-    """
-    x = float(x)
-    if not np.isfinite(x):
-        return ""
-    if x == 0.0:
-        return "0"
-
-    ax = abs(x)
-    if 1e-3 <= ax <= 9.99e2:
-        # exact-ish decimal, but don't print tons of junk
-        s = f"{x:.10f}".rstrip("0").rstrip(".")
-        # avoid "-0"
-        return "0" if s in ("-0", "+0") else s
-
-    k = int(math.floor(math.log10(ax)))
-    m = x / (10.0 ** k)
-    # single-digit mantissa (rounded) is usually enough for ticks; but keep 2–3 sig figs
-    m_str = f"{m:.3g}"
-    return rf"${m_str}\times 10^{{{k}}}$"
-
-
-def _apply_colorbar_ticklabels(cbar, vmin: float, vmax: float) -> None:
-    """
-    Use three ticks: min, mid, max.
-    Labels follow _fmt_plain_or_phys_001_999.
-    """
-    vmin = float(vmin)
-    vmax = float(vmax)
-    if not np.isfinite(vmin) or not np.isfinite(vmax):
-        return
-
-    if vmax == vmin:
-        ticks = [vmin]
-    else:
-        ticks = [vmin, 0.5 * (vmin + vmax), vmax]
-
-    cbar.set_ticks(ticks)
-    cbar.set_ticklabels([_fmt_plain_or_phys_001_999(t) for t in ticks])
 
 
 def _plot_uvIJ_and_w_year_lonlat(msh_path: Path, epsg_project: int, out_png_uvij: Path, out_png_w: Path, u: np.ndarray,

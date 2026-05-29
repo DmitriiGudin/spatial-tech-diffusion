@@ -60,6 +60,23 @@ class SimpleHomographicCubic:
         denom = 1 + a * x + b * x * x + c * x * x * x
         denom = np.maximum(denom, 1e-15)
         return (x * x * x) / denom
+    
+    
+@dataclass(frozen=True)
+class HomographicPowerWithExponential:
+    """f(x) = (x / (1 + a*x))^b * (1 - e^(-cx))"""
+    a: ParamRef
+    b: ParamRef
+    c: ParamRef
+
+    def __call__(self, x: np.ndarray, *, _g: ParamGetter) -> np.ndarray:
+        x = np.asarray(x, float)
+        a = resolve(_g, self.a, 0)
+        b = resolve(_g, self.b, 0)
+        c = resolve(_g, self.c, 0)
+        denom = 1 + a * x
+        denom = np.maximum(denom, 1e-15)
+        return (x / denom)**b * (1 - np.exp(-c*x))
 
 
 @dataclass(frozen=True)
@@ -295,8 +312,22 @@ SSB_V2_SPEC = ModelSpec(
 )
 
 
+SSB_V3_SPEC = ModelSpec(
+    name="SSB_V3",
+    params=("S0", "a_I", "b_I", "c_I", "gamma_J", "k_J", "D"),
+    defs={
+        "S": Const2Arg(c="S0"),
+        "F_I": HomographicPowerWithExponential(a="a_I", b="b_I", c="c_I"),
+        "G": Linear(a="gamma_J"),
+        "F_J": Linear(a="k_J"),
+        "F_J_prime": Linear(a="k_J").prime(),
+        "mu_prime": Linear(a="D").prime(),
+    }
+)
+
+
 # =============================================================================
 # Currently used model
 # =============================================================================
 
-SSB_CURRENT = compile_model(SSB_V2_SPEC)
+SSB_CURRENT = compile_model(SSB_V3_SPEC)

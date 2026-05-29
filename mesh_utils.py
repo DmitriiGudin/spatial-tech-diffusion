@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Dict, Sequence
 
 from matplotlib.ticker import LogLocator, LogFormatterSciNotation
+import matplotlib.pyplot as plt
+import matplotlib.tri as mtri
+from matplotlib.colors import LogNorm
 
 import numpy as np
 import pandas as pd
@@ -22,6 +25,7 @@ from shapely.ops import unary_union
 from shapely.prepared import prep
 from pyproj import Transformer
 
+import math
 import time
 import logging
 
@@ -51,18 +55,11 @@ _PROJECTORS: dict[int, Transformer] = {}
 _INV_PROJECTORS: dict[int, Transformer] = {}
 
 _STATE_ABBR_TO_FIPS = {
-    "AL": "01", "AK": "02", "AZ": "04", "AR": "05", "CA": "06",
-    "CO": "08", "CT": "09", "DE": "10", "DC": "11", "FL": "12",
-    "GA": "13", "HI": "15", "ID": "16", "IL": "17", "IN": "18",
-    "IA": "19", "KS": "20", "KY": "21", "LA": "22", "ME": "23",
-    "MD": "24", "MA": "25", "MI": "26", "MN": "27", "MS": "28",
-    "MO": "29", "MT": "30", "NE": "31", "NV": "32", "NH": "33",
-    "NJ": "34", "NM": "35", "NY": "36", "NC": "37", "ND": "38",
-    "OH": "39", "OK": "40", "OR": "41", "PA": "42", "RI": "44",
-    "SC": "45", "SD": "46", "TN": "47", "TX": "48", "UT": "49",
-    "VT": "50", "VA": "51", "WA": "53", "WV": "54", "WI": "55",
-    "WY": "56",
-}
+    "AL": "01", "AK": "02", "AZ": "04", "AR": "05", "CA": "06", "CO": "08", "CT": "09", "DE": "10", "DC": "11", "FL": "12",
+    "GA": "13", "HI": "15", "ID": "16", "IL": "17", "IN": "18", "IA": "19", "KS": "20", "KY": "21", "LA": "22", "ME": "23",
+    "MD": "24", "MA": "25", "MI": "26", "MN": "27", "MS": "28", "MO": "29", "MT": "30", "NE": "31", "NV": "32", "NH": "33",
+    "NJ": "34", "NM": "35", "NY": "36", "NC": "37", "ND": "38", "OH": "39", "OK": "40", "OR": "41", "PA": "42", "RI": "44",
+    "SC": "45", "SD": "46", "TN": "47", "TX": "48", "UT": "49", "VT": "50", "VA": "51", "WA": "53", "WV": "54", "WI": "55", "WY": "56"}
 
 
 def _clean_name(x: str) -> str:
@@ -129,10 +126,7 @@ def project_polygon_to_km(poly_lonlat: Polygon, epsg: int) -> Polygon:
     transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
 
     def _proj_coords(coords):
-        xs_m, ys_m = transformer.transform(
-            [c[0] for c in coords],
-            [c[1] for c in coords],
-        )
+        xs_m, ys_m = transformer.transform([c[0] for c in coords], [c[1] for c in coords])
         xs_km = [x / 1000.0 for x in xs_m]
         ys_km = [y / 1000.0 for y in ys_m]
         return list(zip(xs_km, ys_km))
@@ -185,11 +179,7 @@ def make_region_tag(state_list, county_list=None, city_list=None, *, max_visible
         x = re.sub(r"\s+", " ", x)
         return x
 
-    payload = {
-        "states": sorted(states),
-        "counties": sorted(norm(c) for c in counties),
-        "cities": sorted(norm(c) for c in cities),
-    }
+    payload = {"states": sorted(states), "counties": sorted(norm(c) for c in counties), "cities": sorted(norm(c) for c in cities)}
 
     digest = hashlib.blake2b(json.dumps(payload, sort_keys=True).encode("utf-8"), digest_size=8).hexdigest()[:int(digest_len)]
 
@@ -200,14 +190,191 @@ def make_region_tag(state_list, county_list=None, city_list=None, *, max_visible
 
     if counties:
         if max_visible_counties > 0 and len(counties) <= max_visible_counties:
-            visible = "_".join(
-                re.sub(r"[^A-Za-z0-9]+", "_", c).strip("_")
-                for c in counties
-            )
+            visible = "_".join(re.sub(r"[^A-Za-z0-9]+", "_", c).strip("_") for c in counties)
             return f"{state_part}__county_{visible}_{digest}"
         return f"{state_part}__counties_{digest}"
 
     return state_part
+
+
+# =============================================================================
+# Plot helpers
+# =============================================================================
+
+def _plot_cities_lonlat(ax, cities: Dict[str, Sequence[float]], marker_size: float = 70.0, text_alpha: float = 0.65, text_dx: float = 0.08, text_dy: float = 0.06):
+    if not cities:
+        return
+    for name, xy in cities.items():
+        if xy is None or len(xy) != 2:
+            continue
+        lon, lat = float(xy[0]), float(xy[1])
+        ax.scatter([lon], [lat], marker="*", s=marker_size, c="red", linewidths=0.0, zorder=5)
+        ax.text(lon + text_dx, lat + text_dy, str(name), color="red", alpha=float(text_alpha), fontsize=10, zorder=6)
+        
+
+def _plot_node_circles_lonlat_single(msh_path: Path, epsg_project: int, out_png: Path, values: np.ndarray, title: str, h_km: float,
+    cities: Optional[Dict[str, Sequence[float]]] = None, vlim: Optional[float] = None, cbar_label: str = ""):
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+    from matplotlib.patches import Ellipse
+    from matplotlib.collections import PatchCollection
+    from matplotlib.ticker import ScalarFormatter
+
+    mi = meshio.read(msh_path)
+
+    inv = Transformer.from_crs(f"EPSG:{epsg_project}", "EPSG:4326", always_xy=True)
+    pts_km = mi.points[:, :2]
+    lon, lat = inv.transform(pts_km[:, 0] * 1000.0, pts_km[:, 1] * 1000.0)
+    lon = np.asarray(lon, float)
+    lat = np.asarray(lat, float)
+
+    vals = np.asarray(values, float)
+
+    finite = vals[np.isfinite(vals)]
+    if finite.size == 0:
+        vmin, vmax = -1.0, 1.0
+    else:
+        if vlim is not None:
+            L = float(max(vlim, 1e-12))
+            vmin, vmax = -L, L
+        else:
+            vmin = float(np.min(finite))
+            vmax = float(np.max(finite))
+            if vmax <= vmin:
+                vmax = vmin + 1.0
+
+    norm = Normalize(vmin=vmin, vmax=vmax)
+
+    r_km = (np.sqrt(3.0) / 4.0) * float(h_km)
+    KM_PER_DEG_LAT = 111.32
+    dy_deg = r_km / KM_PER_DEG_LAT
+    dx_deg = r_km / (KM_PER_DEG_LAT * np.clip(np.cos(np.deg2rad(lat)), 1e-6, None))
+
+    patches = [Ellipse((float(x), float(y)), width=float(2.0 * wx), height=float(2.0 * dy_deg)) for x, y, wx in zip(lon, lat, dx_deg)]
+    pc = PatchCollection(patches, array=vals, norm=norm, linewidths=0.0)
+
+    fig, ax = plt.subplots(1, 1, figsize=(9, 7), constrained_layout=True)
+    ax.add_collection(pc)
+    ax.autoscale_view()
+    _plot_cities_lonlat(ax, cities or {})
+    ax.set_title(title)
+    ax.set_xlabel("Longitude (deg)")
+    ax.set_ylabel("Latitude (deg)")
+    ax.set_aspect("equal", adjustable="box")
+
+    cbar = fig.colorbar(pc, ax=ax, location="right", fraction=0.045, pad=0.02)
+    if cbar_label:
+        cbar.set_label(cbar_label)
+    fmt = ScalarFormatter(useOffset=False)
+    fmt.set_scientific(False)
+    cbar.formatter = fmt
+    cbar.update_ticks()
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+    
+    
+def _signed_log1p_scale(x: np.ndarray, eps: float = 0.0) -> np.ndarray:
+    x = np.asarray(x, float)
+    return np.sign(x) * np.log1p(np.abs(x) + float(eps))
+
+
+def _nice_vmax_1digit(M: float) -> float:
+    """
+    Smallest number >= M of the form d * 10^k with d in {1,...,9}.
+    If M <= 0, returns 1.0 (non-degenerate colorbar).
+    """
+    M = float(M)
+    if not np.isfinite(M) or M <= 0.0:
+        return 1.0
+
+    k = int(math.floor(math.log10(M)))
+    s = M / (10.0 ** k)              # in [1, 10)
+    d = int(math.ceil(s - 1e-15))    # avoid floating one-off
+    d = min(max(d, 1), 9)
+    return float(d) * (10.0 ** k)
+
+
+def _fmt_plain_or_phys(x: float) -> str:
+    """
+    Format:
+      - decimal if |x| in [1e-3, 9e2]
+      - otherwise "d×10^k" style (mathtext) with compact mantissa
+    """
+    x = float(x)
+    if not np.isfinite(x):
+        return ""
+    if x == 0.0:
+        return "0"
+
+    ax = abs(x)
+    if 1e-3 <= ax <= 9e2:
+        # decimal, avoid trailing zeros
+        s = f"{x:.6f}".rstrip("0").rstrip(".")
+        return s
+
+    k = int(math.floor(math.log10(ax)))
+    m = x / (10.0 ** k)
+
+    # compact mantissa: 1–3 significant digits, trim zeros
+    m_str = f"{m:.3g}"
+    # enforce e.g. "-0.0006" doesn't happen here
+    return rf"${m_str}\times 10^{{{k}}}$"
+
+
+def _apply_colorbar_format(cbar, vmax: float) -> None:
+    """
+    Use just a few ticks and human-friendly labels.
+    Requirement focus: make max label clean.
+    """
+    vmax = float(vmax)
+    ticks = np.array([0.0, 0.5 * vmax, vmax], dtype=float)
+    cbar.set_ticks(ticks)
+    cbar.set_ticklabels([_fmt_plain_or_phys(t) for t in ticks])    
+    
+    
+def _fmt_plain_or_phys_001_999(x: float) -> str:
+    """
+    If |x| in [1e-3, 9.99e2] => decimal string.
+    Else => mathtext like $4\\times 10^{-3}$.
+    """
+    x = float(x)
+    if not np.isfinite(x):
+        return ""
+    if x == 0.0:
+        return "0"
+
+    ax = abs(x)
+    if 1e-3 <= ax <= 9.99e2:
+        # exact-ish decimal, but don't print tons of junk
+        s = f"{x:.10f}".rstrip("0").rstrip(".")
+        # avoid "-0"
+        return "0" if s in ("-0", "+0") else s
+
+    k = int(math.floor(math.log10(ax)))
+    m = x / (10.0 ** k)
+    m_str = f"{m:.3g}"
+    return rf"${m_str}\times 10^{{{k}}}$"
+
+
+def _apply_colorbar_ticklabels(cbar, vmin: float, vmax: float) -> None:
+    """
+    Use three ticks: min, mid, max.
+    Labels follow _fmt_plain_or_phys_001_999.
+    """
+    vmin = float(vmin)
+    vmax = float(vmax)
+    if not np.isfinite(vmin) or not np.isfinite(vmax):
+        return
+
+    if vmax == vmin:
+        ticks = [vmin]
+    else:
+        ticks = [vmin, 0.5 * (vmin + vmax), vmax]
+
+    cbar.set_ticks(ticks)
+    cbar.set_ticklabels([_fmt_plain_or_phys_001_999(t) for t in ticks])
 
 
 # ============================================================
@@ -240,11 +407,7 @@ def load_admin1_states(admin1_shp: Path) -> gpd.GeoDataFrame:
         state_code = gdf["postal_code"].astype(str)
 
     if state_code is None:
-        raise ValueError(
-            "Could not find a usable state code column. "
-            "Tried: iso_3166_2, postal, postal_code. "
-            f"Available columns: {list(gdf.columns)}"
-        )
+        raise ValueError("Could not find a usable state code column. Tried: iso_3166_2, postal, postal_code. Available columns: {list(gdf.columns)}")
 
     gdf = gdf.copy()
     gdf["state_code"] = state_code.str.upper().str.strip()
@@ -255,10 +418,7 @@ def load_admin1_states(admin1_shp: Path) -> gpd.GeoDataFrame:
     return gdf
 
 
-def build_region_polygon_from_states(
-    admin1_shp: Path,
-    state_codes: Iterable[str],
-) -> Polygon:
+def build_region_polygon_from_states(admin1_shp: Path, state_codes: Iterable[str]) -> Polygon:
     """
     Union the listed states into a single polygon (lon/lat), keep largest component.
     """
@@ -311,10 +471,7 @@ def load_us_counties(county_shp: Path) -> gpd.GeoDataFrame:
     required = {"NAME", "STATEFP"}
     missing = required - set(gdf.columns)
     if missing:
-        raise ValueError(
-            f"County shapefile missing required columns {sorted(missing)}. "
-            f"Available columns: {list(gdf.columns)}"
-        )
+        raise ValueError(f"County shapefile missing required columns {sorted(missing)}. Available columns: {list(gdf.columns)}")
 
     gdf = gdf.copy()
     gdf["county_name_clean"] = gdf["NAME"].astype(str).map(_clean_name)
@@ -326,11 +483,7 @@ def load_us_counties(county_shp: Path) -> gpd.GeoDataFrame:
     return gdf
 
 
-def build_region_polygon_from_counties(
-    county_shp: Path,
-    county_names: Iterable[str],
-    state_codes: Optional[Iterable[str]] = None,
-) -> Polygon:
+def build_region_polygon_from_counties(county_shp: Path, county_names: Iterable[str], state_codes: Optional[Iterable[str]] = None) -> Polygon:
     """
     Select counties by NAME, optionally restricted to state_codes.
 
@@ -352,10 +505,7 @@ def build_region_polygon_from_counties(
     sel = gdf[gdf["county_name_clean"].isin(counties)].copy()
 
     if len(sel) == 0:
-        raise ValueError(
-            f"No counties found for county_names={sorted(counties)} "
-            f"within state_codes={list(state_codes) if state_codes is not None else None}."
-        )
+        raise ValueError(f"No counties found for county_names={sorted(counties)} within state_codes={list(state_codes) if state_codes is not None else None}.")
 
     geom = unary_union(sel.geometry.values)
     if geom.is_empty:
@@ -364,14 +514,8 @@ def build_region_polygon_from_counties(
     return pick_largest_polygon(geom)
 
 
-def build_region_polygon(
-    *,
-    admin1_shp: Path,
-    state_codes: Iterable[str],
-    county_shp: Optional[Path] = None,
-    county_names: Optional[Iterable[str]] = None,
-    city_names: Optional[Iterable[str]] = None,
-) -> Polygon:
+def build_region_polygon(*, admin1_shp: Path, state_codes: Iterable[str],county_shp: Optional[Path] = None,
+    county_names: Optional[Iterable[str]] = None, city_names: Optional[Iterable[str]] = None) -> Polygon:
     """
     Region priority:
       city_list nonempty   -> currently unsupported, fail loudly
@@ -382,19 +526,12 @@ def build_region_polygon(
     county_names = list(county_names or [])
 
     if city_names:
-        raise NotImplementedError(
-            "city_list is recognized but not implemented yet. "
-            "Use county_list for now."
-        )
+        raise NotImplementedError("city_list is recognized but not implemented yet. Use county_list for now.")
 
     if county_names:
         if county_shp is None:
             raise ValueError("county_shp must be provided when county_names is nonempty.")
-        return build_region_polygon_from_counties(
-            county_shp=county_shp,
-            county_names=county_names,
-            state_codes=state_codes,
-        )
+        return build_region_polygon_from_counties(county_shp=county_shp, county_names=county_names, state_codes=state_codes)
 
     return build_region_polygon_from_states(admin1_shp, state_codes)
 
@@ -462,13 +599,7 @@ def _add_polygon_to_gmsh(model, poly_km: Polygon, h_km: float, ring_eps: float):
     return surf
 
 
-def build_mesh_from_polygon_km(
-    poly_km: Polygon,
-    out_msh: Path,
-    cfg: MeshBuildConfig,
-    verbose: bool = True,
-    model_name: str = "mesh_km",
-) -> None:
+def build_mesh_from_polygon_km(poly_km: Polygon, out_msh: Path, cfg: MeshBuildConfig, verbose: bool = True, model_name: str = "mesh_km") -> None:
     """
     Mesh a planar polygon in kilometers with Gmsh and write .msh.
     """
@@ -539,18 +670,8 @@ def build_mesh_from_polygon_km(
 # End-to-end convenience builders
 # ============================================================
 
-def build_mesh_from_admin1_region(
-    admin1_shp: Path,
-    state_codes: Iterable[str],
-    out_msh: Path,
-    cfg: MeshBuildConfig,
-    verbose: bool = True,
-    model_name: str = "region_mesh_km",
-    *,
-    county_shp: Optional[Path] = None,
-    county_names: Optional[Iterable[str]] = None,
-    city_names: Optional[Iterable[str]] = None,
-) -> None:
+def build_mesh_from_admin1_region(admin1_shp: Path, state_codes: Iterable[str], out_msh: Path, cfg: MeshBuildConfig, verbose: bool = True, model_name: str = "region_mesh_km",
+    *, county_shp: Optional[Path] = None, county_names: Optional[Iterable[str]] = None, city_names: Optional[Iterable[str]] = None) -> None:
     """
     Build a mesh for a region defined by a list of 2-letter state codes.
     """
@@ -563,10 +684,6 @@ def build_mesh_from_admin1_region(
 # ============================================================
 # Plotting (mesh -> lon/lat)
 # ============================================================
-
-import matplotlib.pyplot as plt
-import matplotlib.tri as mtri
-from matplotlib.colors import LogNorm
 
 
 def plot_msh_triangles_lonlat(msh_path: Path, out_png: Path, epsg_project: int = 5070):
@@ -742,18 +859,11 @@ def triangle_areas_km2_from_skfem(mesh) -> np.ndarray:
     return 0.5 * np.abs((x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1))
 
 
-def estimated_population_integral_on_mesh(
-    msh_path: Path,
-    year: float,
-    epsg_project: int = 5070,
-    *,
-    mesh: Optional[MeshTri] = None,
-) -> float:
+def estimated_population_integral_on_mesh(msh_path: Path, year: float, epsg_project: int = 5070, *, mesh: Optional[MeshTri] = None) -> float:
     """
     Mesh-only mode:
         pop_est(year) = sum_i rho_i(year) * A_i
     """
-    from fem_utils import load_mesh_km_from_msh
 
     if mesh is None:
         mesh = load_mesh_km_from_msh(msh_path)
@@ -765,25 +875,13 @@ def estimated_population_integral_on_mesh(
     return float(np.dot(rho_nodes, A_nodes))
 
 
-def print_population_mass_check(
-    admin1_shp: Path,
-    state_codes: Iterable[str],
-    msh_path: Path,
-    year: float = 2023.0,
-    epsg_project: int = 5070,
-    *,
-    mesh: Optional[MeshTri] = None,
-    county_shp: Optional[Path] = None,
-    county_names: Optional[Iterable[str]] = None,
-    city_names: Optional[Iterable[str]] = None,
-) -> None:
+def print_population_mass_check(admin1_shp: Path, state_codes: Iterable[str], msh_path: Path, year: float = 2023.0, epsg_project: int = 5070,
+    *, mesh: Optional[MeshTri] = None, county_shp: Optional[Path] = None, county_names: Optional[Iterable[str]] = None, city_names: Optional[Iterable[str]] = None) -> None:
     with timed("print_population_mass_check"):
         poly_lonlat = build_region_polygon(admin1_shp=admin1_shp, state_codes=state_codes, county_shp=county_shp, county_names=county_names, city_names=city_names)
         true_pop = true_population_inside_region(poly_lonlat, year=year)
 
-        est_pop = estimated_population_integral_on_mesh(
-            msh_path=msh_path, year=year, epsg_project=epsg_project, mesh=mesh
-        )
+        est_pop = estimated_population_integral_on_mesh(msh_path=msh_path, year=year, epsg_project=epsg_project, mesh=mesh)
 
         denom = max(true_pop, 1.0)
         print(f"[POP CHECK] mode=MESH-NODAL-MASSLUMP year={year:.0f} "
@@ -840,11 +938,7 @@ def true_population_per_triangle_fast(
     pops_in: np.ndarray,           # (Nzip_in,) populations
 ) -> np.ndarray:
     # Build triangulation in ZIP-plane
-    tri = mtri.Triangulation(
-        zip_nodes_xy[:, 0],
-        zip_nodes_xy[:, 1],
-        tri_nodes_zipxy
-    )
+    tri = mtri.Triangulation(zip_nodes_xy[:, 0], zip_nodes_xy[:, 1], tri_nodes_zipxy)
 
     # Fast point -> triangle lookup
     finder = tri.get_trifinder()
@@ -853,11 +947,7 @@ def true_population_per_triangle_fast(
     inside = tri_ids >= 0
     ntri = tri_nodes_zipxy.shape[0]
 
-    pop_true_tri = np.bincount(
-        tri_ids[inside].astype(np.int64),
-        weights=pops_in[inside],
-        minlength=ntri
-    ).astype(float)
+    pop_true_tri = np.bincount(tri_ids[inside].astype(np.int64), weights=pops_in[inside], minlength=ntri).astype(float)
 
     print("[DEBUG] trifinder assigned ZIP points:", int(np.count_nonzero(inside)), "/", int(zip_xy_in.shape[0]))
     return pop_true_tri
@@ -905,12 +995,7 @@ def plot_triangle_population_comparison(
         lat = np.asarray(lat, float)
 
         # ---- estimated population per NODE (mass-lumped) ----
-        out = get_batch_nodal_density(
-            mesh, [year],
-            epsg_project=epsg_project,
-            return_masses=True,
-            use_cache=True
-        )
+        out = get_batch_nodal_density(mesh, [year], epsg_project=epsg_project, return_masses=True, use_cache=True)
         dens_nodes = out["rho_nodes"][0]  # persons / km^2
         A_nodes = out["A_nodes"]          # km^2
         pop_est_node = dens_nodes * A_nodes  # persons per node “cell”
@@ -923,22 +1008,14 @@ def plot_triangle_population_comparison(
         poly_zipkm = polygon_lonlat_to_zipkm(poly_lonlat)
         ppoly_zipkm = prep(poly_zipkm)
 
-        zip_inside_region = np.array(
-            [ppoly_zipkm.contains(Point(float(x), float(y))) for (x, y) in zip_xy],
-            dtype=bool
-        )
+        zip_inside_region = np.array([ppoly_zipkm.contains(Point(float(x), float(y))) for (x, y) in zip_xy], dtype=bool)
         zip_xy_in = zip_xy[zip_inside_region]
         pops_in = pops_t[zip_inside_region]
 
         # Map mesh nodes to ZIP-plane
         zip_nodes_xy = np.array([lonlat_to_km(lon[i], lat[i]) for i in range(len(lon))], dtype=float)
 
-        pop_true_tri = true_population_per_triangle_fast(
-            tri_nodes_zipxy=tri_nodes,
-            zip_nodes_xy=zip_nodes_xy,
-            zip_xy_in=zip_xy_in,
-            pops_in=pops_in,
-        )
+        pop_true_tri = true_population_per_triangle_fast(tri_nodes_zipxy=tri_nodes, zip_nodes_xy=zip_nodes_xy, zip_xy_in=zip_xy_in, pops_in=pops_in)
 
         print(f"[true-tri] triangles nonempty: {np.count_nonzero(pop_true_tri > 0)} / {pop_true_tri.size}")
         print(f"[true-tri] total pop from triangle binning: {pop_true_tri.sum():,.0f}")
@@ -968,12 +1045,7 @@ def plot_triangle_population_comparison(
         norm = LogNorm(vmin=vmin, vmax=vmax, clip=True)
 
         # ---- LEFT: triangle choropleth ----
-        tpc0 = axes[0].tripcolor(
-            triang,
-            np.maximum(pop_true_tri, eps),
-            shading="flat",
-            norm=norm
-        )
+        tpc0 = axes[0].tripcolor(triang, np.maximum(pop_true_tri, eps), shading="flat", norm=norm)
         axes[0].set_title(f"True population / triangle (ZIP centroid sum), year={year:.0f}")
         axes[0].set_xlabel("Longitude (deg)")
         axes[0].set_ylabel("Latitude (deg)")
@@ -1082,13 +1154,7 @@ def plot_adoptions_vs_costs(
         lon = lon.loc[ok_xy].to_numpy(float)
         lat = lat.loc[ok_xy].to_numpy(float)
     
-        inside, _, _, _ = _events_inside_mesh_mask(
-            mesh,
-            lon,
-            lat,
-            epsg_project=int(epsg_project),
-            chunk_size=int(chunk_size),
-        )
+        inside, _, _, _ = _events_inside_mesh_mask(mesh, lon, lat, epsg_project=int(epsg_project), chunk_size=int(chunk_size))
     
         df = df.loc[inside].copy()
         if df.empty:
@@ -1170,10 +1236,7 @@ def plot_adoptions_vs_costs(
         # ---- Plot ----
         out_png.parent.mkdir(parents=True, exist_ok=True)
 
-        fig, axes = plt.subplots(
-            3, 1, figsize=(12, 10), sharex=True, constrained_layout=True,
-            gridspec_kw=dict(height_ratios=[2.0, 2.0, 1.2])
-        )
+        fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True, constrained_layout=True, gridspec_kw=dict(height_ratios=[2.0, 2.0, 1.2]))
 
         # 1) Adoptions
         axes[0].plot(months, counts, marker="o", linestyle="-", linewidth=1.5, markersize=3)
@@ -1190,12 +1253,7 @@ def plot_adoptions_vs_costs(
         axes[1].grid(True, alpha=0.25)
         axes[1].legend(loc="best")
 
-        axes[1].text(
-            0.01, 0.95,
-            f"CPI base used: {base_dt.strftime('%Y-%m')} (CPI={float(cpi_base):.3f})",
-            transform=axes[1].transAxes,
-            va="top"
-        )
+        axes[1].text(0.01, 0.95, f"CPI base used: {base_dt.strftime('%Y-%m')} (CPI={float(cpi_base):.3f})", transform=axes[1].transAxes, va="top")
 
         # 3) Price observation counts
         axes[2].bar(months, n_price, width=25)  # width in days-ish; OK for monthly bars
@@ -1739,6 +1797,181 @@ def plot_node_adoptions_vs_population_powerlaw(
         print(return_dict)
         
         return return_dict
+    
+    
+def plot_adoptions_years(
+    *,
+    msh_path: Path,
+    events_df: pd.DataFrame,
+    out_dir: Path,
+    epsg_project: int,
+    start_year: int,
+    end_year: int,
+    h_km: float,
+    cities=None,
+    chunk_size: int = 50_000,
+):
+    from fem_utils import bin_events_year_node, _plot_node_circles_lonlat_single
+
+    mesh = load_mesh_km_from_msh(msh_path)
+
+    counts_node, K_total, K_inside, year_labels, min_ts, max_ts = bin_events_year_node(
+        mesh=mesh,
+        events_df=events_df,
+        epsg_project=epsg_project,
+        t_min_year=int(start_year),
+        t_max_year=int(end_year),
+        chunk_size=int(chunk_size),
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, yy in enumerate(year_labels):
+        out_png = out_dir / f"adoptions_nodes_{int(yy)}.png"
+        _plot_node_circles_lonlat_single(
+            msh_path=msh_path,
+            epsg_project=epsg_project,
+            out_png=out_png,
+            values=np.log1p(counts_node[i]),
+            title=f"Observed adoptions, log(1 + count), {int(yy)}",
+            h_km=h_km,
+            cities=cities or {},
+            cbar_label="log(1 + count)",
+        )
+
+    return counts_node, year_labels
+
+
+def plot_mesh_population_nodes(
+    *,
+    msh_path: Path,
+    out_png: Path,
+    year: float = 2023.0,
+    epsg_project: int = 5070,
+    h_km: float = 5.0,
+    cities=None,
+):
+    from fem_utils import _plot_node_circles_lonlat_single
+    from density_utils import get_batch_nodal_density
+
+    mesh = load_mesh_km_from_msh(msh_path)
+
+    out = get_batch_nodal_density(
+        mesh,
+        [float(year)],
+        epsg_project=int(epsg_project),
+        return_masses=True,
+        use_cache=True,
+    )
+
+    rho = np.asarray(out["rho_nodes"][0], float)
+    A_nodes = np.asarray(out["A_nodes"], float)
+    pop_nodes = rho * A_nodes
+
+    _plot_node_circles_lonlat_single(
+        msh_path=msh_path,
+        epsg_project=int(epsg_project),
+        out_png=out_png,
+        values=np.log1p(pop_nodes),
+        title=f"Estimated population on mesh, log(1 + population), {int(year)}",
+        h_km=float(h_km),
+        cities=cities or {},
+        cbar_label="log(1 + population)",
+    )
+
+    return pop_nodes
+
+
+def summarize_counties_for_region(
+    *,
+    county_shp: Path,
+    state_codes,
+    county_names,
+    events_df: pd.DataFrame,
+    zip_population_csv: Path,
+    start_year: int,
+    end_year: int,
+    epsg_project: int = 5070,
+    out_csv: Optional[Path] = None,
+) -> pd.DataFrame:
+    import geopandas as gpd
+    from shapely.prepared import prep
+
+    counties_gdf = load_us_counties(county_shp)
+
+    states = {str(s).strip().upper() for s in state_codes}
+    counties_clean = {_clean_name(c) for c in (county_names or [])}
+
+    sel = counties_gdf[counties_gdf["state_code"].isin(states)].copy()
+    if counties_clean:
+        sel = sel[sel["county_name_clean"].isin(counties_clean)].copy()
+
+    if sel.empty:
+        raise ValueError("No counties selected for county summary.")
+
+    # Project for area calculation.
+    sel_proj = sel.to_crs(f"EPSG:{int(epsg_project)}")
+    sel["area_km2"] = sel_proj.geometry.area.to_numpy(float) / 1e6
+
+    # Population from ZIP points.
+    zips = pd.read_csv(zip_population_csv)
+    if "longitude" not in zips.columns or "latitude" not in zips.columns:
+        raise ValueError("ZIP population CSV must contain longitude/latitude.")
+
+    pop_col = "population"
+    if pop_col not in zips.columns:
+        # adjust if your actual column differs
+        candidates = [c for c in zips.columns if "pop" in c.lower()]
+        if not candidates:
+            raise ValueError(f"Could not find population column in {zip_population_csv}.")
+        pop_col = candidates[0]
+
+    zip_points = gpd.GeoDataFrame(zips.copy(), geometry=gpd.points_from_xy(zips["longitude"], zips["latitude"]), crs="EPSG:4326")
+
+    # Events.
+    ev = events_df.copy()
+    ev["date"] = pd.to_datetime(ev["date"], errors="coerce")
+    ev = ev.dropna(subset=["date", "longitude", "latitude"]).copy()
+    ev["year"] = ev["date"].dt.year.astype(int)
+    ev = ev[(ev["year"] >= int(start_year)) & (ev["year"] <= int(end_year))].copy()
+
+    ev_points = gpd.GeoDataFrame(ev, geometry=gpd.points_from_xy(ev["longitude"], ev["latitude"]), crs="EPSG:4326")
+
+    years = list(range(int(start_year), int(end_year) + 1))
+    rows = []
+
+    for _, row in sel.iterrows():
+        name = str(row["NAME"])
+        state = str(row.get("state_code", ""))
+        geom = row.geometry
+        pg = prep(geom)
+
+        zip_inside = zip_points.geometry.apply(pg.contains)
+        county_pop = float(pd.to_numeric(zip_points.loc[zip_inside, pop_col], errors="coerce").fillna(0).sum())
+
+        ev_inside = ev_points.geometry.apply(pg.contains)
+        ev_county = ev_points.loc[ev_inside].copy()
+
+        yearly = (ev_county.groupby("year").size().reindex(years, fill_value=0).astype(int))
+
+        rows.append({
+            "state": state,
+            "county": name,
+            "population": county_pop,
+            "area_km2": float(row["area_km2"]),
+            "total_adoptions": int(yearly.sum()),
+            "zero_adoption_years": int((yearly == 0).sum()),
+            "yearly_adoptions": "; ".join(f"{y}:{int(yearly.loc[y])}" for y in years),
+        })
+
+    out = pd.DataFrame(rows).sort_values(["state", "county"]).reset_index(drop=True)
+
+    if out_csv is not None:
+        out_csv = Path(out_csv)
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
+        out.to_csv(out_csv, index=False)
+
+    return out
 
 
 # ============================================================

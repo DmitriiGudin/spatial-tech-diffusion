@@ -39,9 +39,12 @@ from mesh_utils import (
     plot_node_adoptions_vs_population_powerlaw,
     plot_adoptions_vs_costs,
     plot_mesh_costs,
-    make_region_tag
+    make_region_tag,
+    plot_adoptions_years,
+    plot_mesh_population_nodes,
+    summarize_counties_for_region,
+    load_mesh_km_from_msh
 )
-from fem_utils import load_mesh_km_from_msh
 
 
 def _parse_list_arg(s: str, *, upper: bool = False) -> List[str]:
@@ -95,6 +98,7 @@ def main() -> int:
     out_root = Path("out") / "mesh_diag"
     out_dir_mesh = out_root / "mesh"
     out_dir_fig = out_root / "figures"
+    out_dir_data = out_root / "data"
     out_dir_mesh.mkdir(parents=True, exist_ok=True)
     out_dir_fig.mkdir(parents=True, exist_ok=True)
 
@@ -181,6 +185,51 @@ def main() -> int:
     if events_sel.empty:
         print(f"[RUN] WARNING: no events found for states={states} in {csv_events.name}. Skipping adoption plots.")
         return 0
+    
+    # Population-only mesh plot.
+    png_pop_nodes = out_dir_fig / f"{tag}_population_nodes_2023.png"
+    plot_mesh_population_nodes(
+        msh_path=msh_path,
+        out_png=png_pop_nodes,
+        year=2023.0,
+        epsg_project=epsg_project,
+        h_km=h_km,
+        cities=cities if "cities" in locals() else {},
+    )
+    print(f"[RUN] saved population node plot: {png_pop_nodes}")
+    
+    # Yearly adoption node plots.
+    adopt_year_dir = out_dir_fig / f"{tag}_adoptions_by_year"
+    plot_adoptions_years(
+        msh_path=msh_path,
+        events_df=events_sel,
+        out_dir=adopt_year_dir,
+        epsg_project=epsg_project,
+        start_year=int(args.start_year_events),
+        end_year=int(args.end_year_events),
+        h_km=h_km,
+        cities=cities if "cities" in locals() else {},
+    )
+    print(f"[RUN] saved yearly adoption plots to: {adopt_year_dir}")
+    
+    zip_population_csv = base / "processed" / "zip_population_all.csv"
+    county_summary_csv = out_dir_data / f"{tag}_county_summary.csv"
+    
+    county_summary = summarize_counties_for_region(
+        county_shp=county_shp,
+        state_codes=states,
+        county_names=counties,
+        events_df=events_sel,
+        zip_population_csv=zip_population_csv,
+        start_year=int(args.start_year_events),
+        end_year=int(args.end_year_events),
+        epsg_project=epsg_project,
+        out_csv=county_summary_csv,
+    )
+    
+    print("[RUN] county summary:")
+    print(county_summary.to_string(index=False))
+    print(f"[RUN] saved county summary: {county_summary_csv}")
     
     # Adoptions vs inflation-adjusted costs (monthly CPI, base 2025)
     png_costs = out_dir_fig / f"{tag}_adoptions_vs_costs_cpi2025.png"

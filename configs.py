@@ -52,7 +52,7 @@ default = dict(
         t_max_year=2024,
     ),
     spsa_params=dict(
-        n_iter=1000,
+        n_iter=10,#n_iter=1000,
         a=0.02,
         c=0.1,
         gamma=0.101,
@@ -61,8 +61,8 @@ default = dict(
         n_grad_avg=3
     ),
     randomSearch_params=dict(
-        N_0=1000,
-        stages=((25, 25), (10, 50)),
+        N_0=10,#N_0=1000,
+        stages=((5,2),(2,5))#stages=((25, 25), (10, 50)),
     ),
     fem_verbose=False,
     mesh_verbose=False,

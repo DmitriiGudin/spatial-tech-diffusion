@@ -1517,9 +1517,16 @@ class Runner:
     def build_fem_config(self) -> FEMConfig:
         tau = float(self.time_params.get("tau", 0.05))
         start_year = float(self.time_params["start_year"])
-        # Keep your previous default “T_years” behavior: run until 2023 if not given
-        # (you can override by providing T_years explicitly in time_params).
-        T_years = float(self.time_params.get("T_years", max(0.0, 2023.0 - start_year)))
+        T_requested = float(self.time_params.get("T_years", max(0.0, 2023.0 - start_year)))
+
+        t_max_year = self.time_params.get("t_max_year", None)
+        if t_max_year is None:
+            T_needed = T_requested
+        else:
+            # Need to solve through Jan 1 after t_max_year.
+            T_needed = float(int(t_max_year) + 1 - start_year)
+        
+        T_years = max(T_requested, T_needed)
 
         epsg = int(self.mesh_params.get("epsg_project", 5070))
         return FEMConfig(tau_years=tau, T_years=T_years, picard_max_iter=int(self.time_params.get("picard_max_iter", 20)),

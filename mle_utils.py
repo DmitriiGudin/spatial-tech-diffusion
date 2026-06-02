@@ -318,7 +318,7 @@ def precompute_stage_objects(msh_path: Path, fem_cfg: FEMConfig, events: EventDa
     nt = times.size
 
     # Time filter
-    mask_t = (events.t_years >= score_cfg.t_min) & (events.t_years <= score_cfg.t_max)
+    mask_t = (events.t_years >= score_cfg.t_min) & (events.t_years < score_cfg.t_max)
     x_ev = events.x_km[mask_t]
     y_ev = events.y_km[mask_t]
     t_ev = events.t_years[mask_t]
@@ -445,98 +445,39 @@ def expected_counts_gsb_snapshot(msh_path: Path, funcs_template: GSBFunctions, t
     return mu
 
 
-def objective_gsb_theta(
-    msh_path: Path,
-    funcs_template: GSBFunctions,
-    theta: Dict[str, float],
-    fem_cfg: FEMConfig,
-    stage_pre: StagePrecompute,
-    score_cfg: ScoreConfig,
-    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
-    *,
-    model_cfg: ModelConfig = SSB_CURRENT,
-    objective_type: str = "loglikelihood",
-) -> float:
+def objective_gsb_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dict[str, float], fem_cfg: FEMConfig, stage_pre: StagePrecompute, score_cfg: ScoreConfig,
+    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, *, model_cfg: ModelConfig = SSB_CURRENT, objective_type: str = "loglikelihood") -> float:
     obj = str(objective_type).lower().strip()
 
     if obj in ("loglikelihood", "ll", "nb", "negbin"):
-        return loglikelihood_theta(
-            msh_path,
-            funcs_template,
-            theta,
-            fem_cfg,
-            stage_pre,
-            score_cfg,
-            sync_boxes=sync_boxes,
-            model_cfg=model_cfg,
-        )
+        return loglikelihood_theta(msh_path, funcs_template, theta, fem_cfg, stage_pre, score_cfg, sync_boxes=sync_boxes, model_cfg=model_cfg)
 
     try:
-        mu = expected_counts_gsb_snapshot(
-            msh_path,
-            funcs_template,
-            theta,
-            fem_cfg,
-            stage_pre,
-            sync_boxes=sync_boxes,
-            model_cfg=model_cfg,
-            lambda_floor=score_cfg.lambda_floor,
-        )
-        return robust_metric_score(stage_pre.counts_node, mu, objective_type=obj)
+        mu = expected_counts_gsb_snapshot(msh_path, funcs_template, theta, fem_cfg, stage_pre, sync_boxes=sync_boxes, model_cfg=model_cfg, lambda_floor=score_cfg.lambda_floor)
+        mask = ((stage_pre.fem_cache.times >= score_cfg.t_min) & (stage_pre.fem_cache.times < score_cfg.t_max))
+        return robust_metric_score(stage_pre.counts_node[mask], mu[mask], objective_type=obj)
     except Exception:
         return float("-inf")
     
     
-def objective_smith_song_theta(
-    msh_path: Path,
-    funcs_template: GSBFunctions,
-    theta: Dict[str, float],
-    fem_cfg: FEMConfig,
-    stage_pre: StagePrecompute,
-    score_cfg: ScoreConfig,
-    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
-    *,
-    model_cfg: ModelConfig = SSB_CURRENT,
-    objective_type: str = "loglikelihood",
-    smith_song_history_mode: str = "conditional",
-) -> float:
+def objective_smith_song_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dict[str, float], fem_cfg: FEMConfig, stage_pre: StagePrecompute, score_cfg: ScoreConfig,
+    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, *, model_cfg: ModelConfig = SSB_CURRENT, objective_type: str = "loglikelihood", smith_song_history_mode: str = "conditional") -> float:
     obj = str(objective_type).lower().strip()
 
     if obj in ("loglikelihood", "ll", "nb", "negbin"):
-        return loglikelihood_smith_song_theta(
-            msh_path,
-            funcs_template,
-            theta,
-            fem_cfg,
-            stage_pre,
-            score_cfg,
-            sync_boxes=sync_boxes,
-            model_cfg=model_cfg,
-            smith_song_history_mode=smith_song_history_mode,
-        )
+        return loglikelihood_smith_song_theta(msh_path, funcs_template, theta, fem_cfg, stage_pre, score_cfg, sync_boxes=sync_boxes, model_cfg=model_cfg, smith_song_history_mode=smith_song_history_mode)
 
     try:
         ss_pre = getattr(stage_pre, "_smith_song_pre", None)
         if ss_pre is None:
-            ss_pre = build_smith_song_precompute(
-                stage_pre,
-                top_k=int(getattr(stage_pre, "ss_top_k", 50)),
-            )
+            ss_pre = build_smith_song_precompute(stage_pre, top_k=int(getattr(stage_pre, "ss_top_k", 50)))
             setattr(stage_pre, "_smith_song_pre", ss_pre)
 
-        mu = smith_song_expected_counts(
-            stage_pre=stage_pre,
-            theta=theta,
-            ss_pre=ss_pre,
-            t_min=score_cfg.t_min,
-            t_max=score_cfg.t_max,
-            eps=1e-300,
-            top_k=int(getattr(stage_pre, "ss_top_k", 50)),
-            kernel_tol=float(getattr(stage_pre, "ss_kernel_tol", 1e-6)),
-            history_mode=smith_song_history_mode,
-        )
+        mu = smith_song_expected_counts(stage_pre=stage_pre, theta=theta, ss_pre=ss_pre, t_min=score_cfg.t_min, t_max=score_cfg.t_max, eps=1e-300,
+            top_k=int(getattr(stage_pre, "ss_top_k", 50)), kernel_tol=float(getattr(stage_pre, "ss_kernel_tol", 1e-6)), history_mode=smith_song_history_mode)
 
-        return robust_metric_score(stage_pre.counts_node, mu, objective_type=obj)
+        mask = ((stage_pre.fem_cache.times >= score_cfg.t_min) & (stage_pre.fem_cache.times < score_cfg.t_max))
+        return robust_metric_score(stage_pre.counts_node[mask], mu[mask], objective_type=obj)
 
     except Exception:
         return float("-inf")
@@ -584,7 +525,7 @@ def loglikelihood_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dic
     ll_raw = 0.0
 
     for k, t in enumerate(sol.times):
-        if t < score_cfg.t_min or t > score_cfg.t_max:
+        if t < score_cfg.t_min or t >= score_cfg.t_max:
             continue
 
         u = sol.U[k]
@@ -1087,18 +1028,8 @@ def _discrete_bass_r_nodes_from_pre(db_pre: DiscreteBassPrecompute, theta: Dict[
 
     return np.maximum(0.0, r0 - r1 * c_nodes + r2 * tf)
 
-def discrete_bass_expected_counts(
-    stage_pre: StagePrecompute,
-    theta: Dict[str, float],
-    db_pre: Optional[DiscreteBassPrecompute] = None,
-    *,
-    t_min: float = 0.0,
-    t_max: float = 25.0,
-    eps: float = 1e-300,
-    top_k: int = 50,
-    kernel_tol: float = 1e-6,
-    history_mode: str = "conditional",
-) -> np.ndarray:
+def discrete_bass_expected_counts(stage_pre: StagePrecompute, theta: Dict[str, float], db_pre: Optional[DiscreteBassPrecompute] = None, *,
+    t_min: float = 0.0, t_max: float = 25.0, eps: float = 1e-300, top_k: int = 50, kernel_tol: float = 1e-6, history_mode: str = "conditional") -> np.ndarray:
     if db_pre is None:
         db_pre = build_discrete_bass_precompute(stage_pre, top_k=top_k)
 
@@ -1162,35 +1093,16 @@ def discrete_bass_expected_counts(
 
     return np.maximum(mu, eps)
 
-def loglikelihood_discrete_bass_theta(
-    msh_path: Path,
-    funcs_template: GSBFunctions,
-    theta: Dict[str, float],
-    fem_cfg: FEMConfig,
-    stage_pre: StagePrecompute,
-    score_cfg: ScoreConfig,
-    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
-    *,
-    model_cfg: ModelConfig = SSB_CURRENT,
-    discrete_bass_history_mode: str = "conditional",
-) -> float:
+def loglikelihood_discrete_bass_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dict[str, float], fem_cfg: FEMConfig, stage_pre: StagePrecompute,
+    score_cfg: ScoreConfig, sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, *, model_cfg: ModelConfig = SSB_CURRENT, discrete_bass_history_mode: str = "conditional") -> float:
     try:
         db_pre = getattr(stage_pre, "_discrete_bass_pre", None)
         if db_pre is None:
             db_pre = build_discrete_bass_precompute(stage_pre, top_k=int(getattr(stage_pre, "db_top_k", 50)))
             setattr(stage_pre, "_discrete_bass_pre", db_pre)
 
-        mu = discrete_bass_expected_counts(
-            stage_pre=stage_pre,
-            theta=theta,
-            db_pre=db_pre,
-            t_min=score_cfg.t_min,
-            t_max=score_cfg.t_max,
-            eps=1e-300,
-            top_k=int(getattr(stage_pre, "db_top_k", 50)),
-            kernel_tol=float(getattr(stage_pre, "db_kernel_tol", 1e-6)),
-            history_mode=discrete_bass_history_mode,
-        )
+        mu = discrete_bass_expected_counts(stage_pre=stage_pre, theta=theta, db_pre=db_pre, t_min=score_cfg.t_min, t_max=score_cfg.t_max,
+            eps=1e-300, top_k=int(getattr(stage_pre, "db_top_k", 50)), kernel_tol=float(getattr(stage_pre, "db_kernel_tol", 1e-6)), history_mode=discrete_bass_history_mode)
     except Exception:
         return float("-inf")
 
@@ -1198,19 +1110,8 @@ def loglikelihood_discrete_bass_theta(
     return negbin_loglik_counts(counts=stage_pre.counts_node, mu=mu, phi=phi, logfact=stage_pre.counts_logfact,
         mu_floor=score_cfg.lambda_floor, normalize_by=max(1, stage_pre.K_inside) if score_cfg.normalize_by_events else None)
 
-def objective_discrete_bass_theta(
-    msh_path: Path,
-    funcs_template: GSBFunctions,
-    theta: Dict[str, float],
-    fem_cfg: FEMConfig,
-    stage_pre: StagePrecompute,
-    score_cfg: ScoreConfig,
-    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
-    *,
-    model_cfg: ModelConfig = SSB_CURRENT,
-    objective_type: str = "loglikelihood",
-    discrete_bass_history_mode: str = "conditional",
-) -> float:
+def objective_discrete_bass_theta(msh_path: Path, funcs_template: GSBFunctions, theta: Dict[str, float], fem_cfg: FEMConfig, stage_pre: StagePrecompute, score_cfg: ScoreConfig,
+    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, *, model_cfg: ModelConfig = SSB_CURRENT, objective_type: str = "loglikelihood", discrete_bass_history_mode: str = "conditional") -> float:
     obj = str(objective_type).lower().strip()
 
     if obj in ("loglikelihood", "ll", "nb", "negbin"):
@@ -1223,19 +1124,11 @@ def objective_discrete_bass_theta(
             db_pre = build_discrete_bass_precompute(stage_pre, top_k=int(getattr(stage_pre, "db_top_k", 50)))
             setattr(stage_pre, "_discrete_bass_pre", db_pre)
 
-        mu = discrete_bass_expected_counts(
-            stage_pre=stage_pre,
-            theta=theta,
-            db_pre=db_pre,
-            t_min=score_cfg.t_min,
-            t_max=score_cfg.t_max,
-            eps=1e-300,
-            top_k=int(getattr(stage_pre, "db_top_k", 50)),
-            kernel_tol=float(getattr(stage_pre, "db_kernel_tol", 1e-6)),
-            history_mode=discrete_bass_history_mode,
-        )
+        mu = discrete_bass_expected_counts(stage_pre=stage_pre, theta=theta, db_pre=db_pre, t_min=score_cfg.t_min, t_max=score_cfg.t_max, eps=1e-300,
+            top_k=int(getattr(stage_pre, "db_top_k", 50)), kernel_tol=float(getattr(stage_pre, "db_kernel_tol", 1e-6)), history_mode=discrete_bass_history_mode)
 
-        return robust_metric_score(stage_pre.counts_node, mu, objective_type=obj)
+        mask = ((stage_pre.fem_cache.times >= score_cfg.t_min) & (stage_pre.fem_cache.times < score_cfg.t_max))
+        return robust_metric_score(stage_pre.counts_node[mask], mu[mask], objective_type=obj)
 
     except Exception:
         return float("-inf")
@@ -1477,18 +1370,9 @@ def _objective_label(objective_type: str) -> str:
     obj = _canonical_objective_name(objective_type)
     return obj if not _objective_is_loss(obj) else f"{obj}_loss"
 
-def run_spsa_stage(
-    stage: StageConfig,
-    funcs_template: GSBFunctions,
-    z0: np.ndarray,
-    specs: List[ParamSpec],
-    stage_pre: StagePrecompute,
-    score_cfg: ScoreConfig,
-    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None,
-    progress: Optional[Callable[[int], None]] = None,
-    score_func: Callable[..., float] = loglikelihood_theta,
-    objective_type: str = "loglikelihood",
-) -> Tuple[np.ndarray, FitResult]:
+def run_spsa_stage(stage: StageConfig, funcs_template: GSBFunctions, z0: np.ndarray, specs: List[ParamSpec], stage_pre: StagePrecompute, score_cfg: ScoreConfig,
+    sync_boxes: Optional[Callable[[Dict[str, float]], None]] = None, progress: Optional[Callable[[int], None]] = None, score_func: Callable[..., float] = loglikelihood_theta,
+    objective_type: str = "loglikelihood") -> Tuple[np.ndarray, FitResult]:
 
     obj = _canonical_objective_name(objective_type)
     label = _objective_label(obj)
@@ -1501,16 +1385,7 @@ def run_spsa_stage(
     history: List[Tuple[int, float, Dict[str, float]]] = []
 
     th0 = unpack_z_to_theta(z, specs)
-    score0 = score_func(
-        stage.msh_path,
-        funcs_template,
-        th0,
-        stage.fem_cfg,
-        stage_pre,
-        score_cfg,
-        sync_boxes=sync_boxes,
-        model_cfg=stage.model_cfg,
-    )
+    score0 = score_func(stage.msh_path, funcs_template, th0, stage.fem_cfg, stage_pre, score_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
 
     best_score, best_theta = score0, th0
 
@@ -1540,14 +1415,8 @@ def run_spsa_stage(
             th_plus = unpack_z_to_theta(z_plus, specs)
             th_minus = unpack_z_to_theta(z_minus, specs)
         
-            score_plus = score_func(
-                stage.msh_path, funcs_template, th_plus, stage.fem_cfg, stage_pre, score_cfg,
-                sync_boxes=sync_boxes, model_cfg=stage.model_cfg
-            )
-            score_minus = score_func(
-                stage.msh_path, funcs_template, th_minus, stage.fem_cfg, stage_pre, score_cfg,
-                sync_boxes=sync_boxes, model_cfg=stage.model_cfg
-            )
+            score_plus = score_func(stage.msh_path, funcs_template, th_plus, stage.fem_cfg, stage_pre, score_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
+            score_minus = score_func(stage.msh_path, funcs_template, th_minus, stage.fem_cfg, stage_pre, score_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
         
             if not (np.isfinite(score_plus) and np.isfinite(score_minus)):
                 continue
@@ -1569,10 +1438,7 @@ def run_spsa_stage(
         z = z + dz
 
         th = unpack_z_to_theta(z, specs)
-        score = score_func(
-            stage.msh_path, funcs_template, th, stage.fem_cfg, stage_pre, score_cfg,
-            sync_boxes=sync_boxes, model_cfg=stage.model_cfg
-        )
+        score = score_func(stage.msh_path, funcs_template, th, stage.fem_cfg, stage_pre, score_cfg, sync_boxes=sync_boxes, model_cfg=stage.model_cfg)
 
         if np.isfinite(score) and score > best_score:
             best_score = score
@@ -1591,20 +1457,10 @@ def run_spsa_stage(
                 f"{_fmt_theta_compact(th, specs)}"
             )
 
-    return z, FitResult(
-        theta_best=best_theta,
-        score_best=best_score,
-        history=history,
-        objective_type=obj,
-    )
+    return z, FitResult(theta_best=best_theta, score_best=best_score, history=history, objective_type=obj)
 
 
-def save_score_trace(
-    history: List[Tuple[int, float, Dict[str, float]]],
-    out_png: Path,
-    *,
-    objective_type: str = "loglikelihood",
-) -> None:
+def save_score_trace(history: List[Tuple[int, float, Dict[str, float]]], out_png: Path, *, objective_type: str = "loglikelihood") -> None:
     import matplotlib.pyplot as plt
 
     obj = _canonical_objective_name(objective_type)
@@ -1828,12 +1684,7 @@ def multi_start_refine(stage: StageConfig, funcs_template: GSBFunctions, specs: 
     # Save final result (single row) and also "final top list" if preferred
     if rs_cfg.save_dir is not None:
         out_csv = Path(rs_cfg.save_dir) / f"{rs_cfg.save_prefix}_final.csv"
-        save_candidates_csv(
-            [(float(res_best.score_best), res_best.theta_best)],
-            out_csv,
-            specs,
-            objective_type=obj,
-        )
+        save_candidates_csv([(float(res_best.score_best), res_best.theta_best)], out_csv, specs, objective_type=obj)
 
     return z_best, res_best
 
@@ -1853,11 +1704,7 @@ def save_candidates_csv(candidates: List[Tuple[float, Dict[str, float]]], out_cs
     label = _objective_label(obj)
     
     for score, th in cand:
-        row = {
-            "objective_type": obj,
-            "score": float(score),
-            label: float(_display_objective_value(score, obj)),
-        }
+        row = {"objective_type": obj, "score": float(score), label: float(_display_objective_value(score, obj))}
     
         # Backward compatibility for old CSV consumers.
         if obj == "loglikelihood":
@@ -2081,32 +1928,37 @@ class Runner:
 
             YEAR0 = float(self.time_params["start_year"])
             tau = float(self.time_params["tau"])
-
-            events = load_events_csv(self.events_csv, region_states=list(self.mesh_params["state_list"]), YEAR0=YEAR0, epsg_project=self.epsg_project, 
-                min_year=self.events_min_year if self.events_min_year is not None else YEAR0, max_year=self.events_max_year)
-
-            t_max = float(np.max(events.t_years)) if events.t_years.size else 0.0
-            score_cfg = ScoreConfig(t_min=0, t_max=t_max, lambda_floor=self.score_lambda_floor, verbose=self.score_verbose,
-                normalize_by_events=self.score_normalize_by_events, finder_chunk_size=self.score_finder_chunk_size)
-
+            
+            # MLE/training window:
+            # [YEAR0, YEAR0 + T_fit) in calendar years.
+            T_fit = float(self.time_params["T_years"])
+            if T_fit <= 0:
+                raise ValueError(f"time_params['T_years'] must be positive, got {T_fit}")
+            
+            fit_end_year = YEAR0 + T_fit
+            
+            events_all = load_events_csv(self.events_csv, region_states=list(self.mesh_params["state_list"]), YEAR0=YEAR0, epsg_project=self.epsg_project,
+                min_year=self.events_min_year if self.events_min_year is not None else YEAR0, max_year=self.events_max_year if self.events_max_year is not None else fit_end_year)
+            
+            # Enforce exclusive upper endpoint exactly.
+            mask_fit = (events_all.cal_year >= YEAR0) & (events_all.cal_year < fit_end_year)
+            
+            events = EventData(x_km=events_all.x_km[mask_fit], y_km=events_all.y_km[mask_fit], t_years=events_all.t_years[mask_fit], cal_year=events_all.cal_year[mask_fit],
+                lon=events_all.lon[mask_fit], lat=events_all.lat[mask_fit], raw=events_all.raw.iloc[np.flatnonzero(mask_fit)].copy())
+            
+            score_cfg = ScoreConfig(t_min=0.0, t_max=T_fit, lambda_floor=self.score_lambda_floor, verbose=self.score_verbose, normalize_by_events=self.score_normalize_by_events,
+                finder_chunk_size=self.score_finder_chunk_size)
+            
             funcs, sync_boxes = self._build_funcs_template()
             specs = self._build_specs()
+            
+            fem_cfg = FEMConfig(tau_years=tau, T_years=T_fit, picard_max_iter=self.picard_max_iter, picard_tol=self.picard_tol, verbose=self.fem_verbose, YEAR0=YEAR0, epsg_project=self.epsg_project)
+            
+            self._log(f"[time] MLE fit window: [{YEAR0:.6g}, {fit_end_year:.6g})")
 
-            fem_cfg = FEMConfig(tau_years=tau, T_years=score_cfg.t_max, picard_max_iter=self.picard_max_iter, picard_tol=self.picard_tol,
-                verbose=self.fem_verbose, YEAR0=YEAR0, epsg_project=self.epsg_project)
-
-            opt_cfg = SPSAConfig(
-                n_iter=int(self.spsa_params["n_iter"]),
-                a=float(self.spsa_params["a"]),
-                c=float(self.spsa_params["c"]),
-                alpha=float(self.spsa_params.get("alpha", 0.602)),
-                gamma=float(self.spsa_params.get("gamma", 0.101)),
-                seed=int(self.spsa_params.get("seed", 0)),
-                print_every=int(self.spsa_params.get("print_every", 1)),
-                grad_clip=float(self.spsa_params["grad_clip"]),
-                step_clip=float(self.spsa_params["step_clip"]),
-                n_grad_avg=int(self.spsa_params.get("n_grad_avg", 1)),
-            )
+            opt_cfg = SPSAConfig(n_iter=int(self.spsa_params["n_iter"]), a=float(self.spsa_params["a"]), c=float(self.spsa_params["c"]), alpha=float(self.spsa_params.get("alpha", 0.602)),
+                gamma=float(self.spsa_params.get("gamma", 0.101)), seed=int(self.spsa_params.get("seed", 0)), print_every=int(self.spsa_params.get("print_every", 1)),
+                grad_clip=float(self.spsa_params["grad_clip"]), step_clip=float(self.spsa_params["step_clip"]), n_grad_avg=int(self.spsa_params.get("n_grad_avg", 1)))
 
             stage = StageConfig(mesh_cfg=MeshBuildConfig(h_km=float(self.mesh_params["h_km"]), simplify_km=float(self.mesh_params["simplify_km"]), epsg_project=self.epsg_project),
                 fem_cfg=fem_cfg, opt_cfg=opt_cfg, msh_path=self.msh_path, model_cfg=self.model_cfg)

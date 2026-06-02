@@ -52,17 +52,17 @@ default = dict(
         t_max_year=2024,
     ),
     spsa_params=dict(
-        n_iter=1000,#n_iter=2000,
-        a=0.02,#a=0.05,
-        c=0.1,#c=0.05,
-        gamma=0.101,#gamma=0,
-        grad_clip=20,#grad_clip=200,
-        step_clip=2,#step_clip=100,
+        n_iter=1000,
+        a=0.02,
+        c=0.1,
+        gamma=0.101,
+        grad_clip=20,
+        step_clip=2,
         n_grad_avg=3
     ),
     randomSearch_params=dict(
-        N_0=1000,#N_0=4000,
-        stages=((25, 25), (10, 50)),#stages=((40, 50), (10, 200)),
+        N_0=1000,
+        stages=((25, 25), (10, 50)),
     ),
     fem_verbose=False,
     mesh_verbose=False,
@@ -126,13 +126,13 @@ GSB_mle_model_params=dict( # SSB_V3_SPEC
     r0=("pos", 0.01, 10),
     r1=("pos", 0.01, 100),
     r2=("pos", 0.1, 10),
-    p=("pos", 1e-5, 1),
+    p=("pos", 1e-5, 0.1),
     q_I=("pos", 1e-3, 10),
-    a_I=("nonneg", 0.1, 10),
-    b_I=("nonneg", 0.5, 5),
+    a_I=("pos", 0.1, 10),
+    b_I=("pos", 0.1, 10),
     c_I=("pos", 0.01, 10),
     gamma_J=("pos", 1e-3, 10),
-    k_J=("nonneg", 0, 1),
+    k_J=("pos", 1e-6, 0.01),
     D=("pos", 1, 1e4),
     S0=("const", 0, 0),
     phi=("const", 100, 100))
@@ -147,12 +147,12 @@ SmithSong_mle_model_params=dict(
     phi=("const", 100, 100))
 
 DiscreteBass_mle_model_params=dict(
-    p=("pos", 1e-5, 1),
+    p=("pos", 1e-5, 0.1),
     q=("pos", 1e-5, 10),
     theta=("nonneg", 0, 10),
     r0=("pos", 0.01, 10),
-    r1=("nonneg", 0, 100),
-    r2=("nonneg", 0, 10),
+    r1=("pos", 0.01, 100),
+    r2=("pos", 0.1, 10),
     phi=("const", 100, 100))
 
 objective_type='rmse'
@@ -217,9 +217,9 @@ NewYork_mesh_params=dict(
 
 NewYork_time_params_sample=dict(
     start_year=2002,
-    T_years=22,
-    t_min_year=2008,
-    t_max_year=2023)
+    T_years=20,
+    t_min_year=2002,
+    t_max_year=2021)
 
 NewYork_time_params_forecast=dict(
     start_year=2002,
@@ -239,9 +239,9 @@ Minneapolis_mesh_params=dict(
 
 Minneapolis_time_params_sample=dict(
     start_year=2007,
-    T_years=17,
+    T_years=15,
     t_min_year=2007,
-    t_max_year=2023)
+    t_max_year=2021)
 
 Minneapolis_time_params_forecast=dict(
     start_year=2007,
@@ -261,9 +261,9 @@ Austin_mesh_params=dict(
 
 Austin_time_params_sample=dict(
     start_year=2004,
-    T_years=20,
+    T_years=18,
     t_min_year=2004,
-    t_max_year=2023)
+    t_max_year=2021)
 
 Austin_time_params_forecast=dict(
     start_year=2004,
@@ -283,9 +283,9 @@ LosAngeles_mesh_params=dict(
 
 LosAngeles_time_params_sample=dict(
     start_year=2001,
-    T_years=23,
+    T_years=21,
     t_min_year=2001,
-    t_max_year=2023)
+    t_max_year=2021)
 
 LosAngeles_time_params_forecast=dict(
     start_year=2001,
@@ -305,9 +305,9 @@ SanFrancisco_mesh_params=dict(
 
 SanFrancisco_time_params_sample=dict(
     start_year=2001,
-    T_years=23,
+    T_years=21,
     t_min_year=2001,
-    t_max_year=2023)
+    t_max_year=2021)
 
 SanFrancisco_time_params_forecast=dict(
     start_year=2001,
@@ -327,9 +327,9 @@ SanDiego_mesh_params=dict(
 
 SanDiego_time_params_sample=dict(
     start_year=2001,
-    T_years=23,
+    T_years=21,
     t_min_year=2001,
-    t_max_year=2023)
+    t_max_year=2021)
 
 SanDiego_time_params_forecast=dict(
     start_year=2001,
@@ -349,9 +349,9 @@ Denver_mesh_params=dict(
 
 Denver_time_params_sample=dict(
     start_year=2007,
-    T_years=17,
+    T_years=15,
     t_min_year=2007,
-    t_max_year=2023)
+    t_max_year=2021)
 
 Denver_time_params_forecast=dict(
     start_year=2007,
@@ -360,6 +360,50 @@ Denver_time_params_forecast=dict(
     t_max_year=2023)
 
 Denver_cities={"Denver": [-104.9915, 39.7420]}
+
+# ---
+
+Orlando_mesh_params=dict(
+    state_list=['FL'],
+    county_list=['Orange','Osceola'],
+    h_km=3,
+    simplify_km=9)
+
+Orlando_time_params_sample=dict(
+    start_year=2015,
+    T_years=7,
+    t_min_year=2015,
+    t_max_year=2021)
+
+Orlando_time_params_forecast=dict(
+    start_year=2015,
+    T_years=7,
+    t_min_year=2022,
+    t_max_year=2023)
+
+Orlando_cities={"Orlando": [-81.3789, 28.5384]}
+
+# ---
+
+SanAntonio_mesh_params=dict(
+    state_list=['TX'],
+    county_list=['Bexar','Comal','Medina'],
+    h_km=3,
+    simplify_km=9)
+
+SanAntonio_time_params_sample=dict(
+    start_year=2010,
+    T_years=12,
+    t_min_year=2010,
+    t_max_year=2021)
+
+SanAntonio_time_params_forecast=dict(
+    start_year=2010,
+    T_years=12,
+    t_min_year=2022,
+    t_max_year=2023)
+
+SanAntonio_cities={"San Antonio": [-98.4911, 29.4243]}
 
 
 
@@ -446,3 +490,13 @@ Custom configurations start here
  Denver_SmithSong_sample, Denver_SmithSong_forecast, 
  Denver_DiscreteBass_sample, Denver_DiscreteBass_forecast, 
  Denver_ml_sample, Denver_ml_forecast) = build_8_models(Denver_mesh_params, Denver_time_params_sample, Denver_time_params_forecast, Denver_cities)
+
+(Orlando_GSB_sample, Orlando_GSB_forecast, 
+ Orlando_SmithSong_sample, Orlando_SmithSong_forecast, 
+ Orlando_DiscreteBass_sample, Orlando_DiscreteBass_forecast, 
+ Orlando_ml_sample, Orlando_ml_forecast) = build_8_models(Orlando_mesh_params, Orlando_time_params_sample, Orlando_time_params_forecast, Orlando_cities)
+
+(SanAntonio_GSB_sample, SanAntonio_GSB_forecast, 
+ SanAntonio_SmithSong_sample, SanAntonio_SmithSong_forecast, 
+ SanAntonio_DiscreteBass_sample, SanAntonio_DiscreteBass_forecast, 
+ SanAntonio_ml_sample, SanAntonio_ml_forecast) = build_8_models(SanAntonio_mesh_params, SanAntonio_time_params_sample, SanAntonio_time_params_forecast, SanAntonio_cities)

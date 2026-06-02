@@ -52,7 +52,7 @@ default = dict(
         t_max_year=2024,
     ),
     spsa_params=dict(
-        n_iter=10,#n_iter=1000,
+        n_iter=1000,
         a=0.02,
         c=0.1,
         gamma=0.101,
@@ -61,8 +61,8 @@ default = dict(
         n_grad_avg=3
     ),
     randomSearch_params=dict(
-        N_0=10,#N_0=1000,
-        stages=((5,2),(2,5))#stages=((25, 25), (10, 50)),
+        N_0=1000,
+        stages=((25, 25), (10, 50)),
     ),
     fem_verbose=False,
     mesh_verbose=False,
@@ -405,6 +405,28 @@ SanAntonio_time_params_forecast=dict(
 
 SanAntonio_cities={"San Antonio": [-98.4911, 29.4243]}
 
+# ---
+
+Sacramento_mesh_params=dict(
+    state_list=['CA'],
+    county_list=['Sacramento','Placer','El Dorado','Yolo'],
+    h_km=4,
+    simplify_km=12)
+
+Sacramento_time_params_sample=dict(
+    start_year=2002,
+    T_years=20,
+    t_min_year=2002,
+    t_max_year=2021)
+
+Sacramento_time_params_forecast=dict(
+    start_year=2002,
+    T_years=20,
+    t_min_year=2022,
+    t_max_year=2023)
+
+Sacramento_cities={"Sacramento": [-121.4944, 38.5816]}
+
 
 
 
@@ -500,3 +522,8 @@ Custom configurations start here
  SanAntonio_SmithSong_sample, SanAntonio_SmithSong_forecast, 
  SanAntonio_DiscreteBass_sample, SanAntonio_DiscreteBass_forecast, 
  SanAntonio_ml_sample, SanAntonio_ml_forecast) = build_8_models(SanAntonio_mesh_params, SanAntonio_time_params_sample, SanAntonio_time_params_forecast, SanAntonio_cities)
+
+(Sacramento_GSB_sample, Sacramento_GSB_forecast, 
+ Sacramento_SmithSong_sample, Sacramento_SmithSong_forecast, 
+ Sacramento_DiscreteBass_sample, Sacramento_DiscreteBass_forecast, 
+ Sacramento_ml_sample, Sacramento_ml_forecast) = build_8_models(Sacramento_mesh_params, Sacramento_time_params_sample, Sacramento_time_params_forecast, Sacramento_cities)

@@ -2,6 +2,8 @@
 
 Python 3.12
 
+Python packages: setuptools, numpy, matplotlib, pandas<3.0, geopandas, scikit-fem, scikit-learn, shapely, meshio, gmsh, pyproj, cpi, warnings, imageio, scipy, contextlib, xgboost, pandas-datareader
+
 
 # Installation
 

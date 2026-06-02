@@ -172,7 +172,7 @@ Chicago_mesh_params=dict(
 
 Chicago_time_params_sample=dict(
     start_year=2015,
-    T_years=9,
+    T_years=7,
     t_min_year=2015,
     t_max_year=2023)
 
@@ -194,7 +194,7 @@ Phoenix_mesh_params=dict(
 
 Phoenix_time_params_sample=dict(
     start_year=2005,
-    T_years=18,
+    T_years=16,
     t_min_year=2005,
     t_max_year=2022)
 

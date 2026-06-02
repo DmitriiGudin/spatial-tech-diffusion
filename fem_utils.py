@@ -1089,6 +1089,34 @@ def fit_bass_to_monthly_counts(y_month: np.ndarray, month_edges_years_rel: np.nd
 # =============================================================================
 
 
+def _monthly_plot_window_from_time_params(time_params: Dict[str, Any]) -> Tuple[int, int, int]:
+    """
+    Monthly diagnostic plot window.
+
+    Returns:
+        plot_start_year
+        plot_end_year
+        fit_end_year
+
+    Convention:
+        Training/fitting interval is [start_year, start_year + T_years).
+        The vertical forecast boundary is Jan 1 of fit_end_year.
+    """
+    start_year = int(float(time_params["start_year"]))
+    T_years = float(time_params["T_years"])
+
+    fit_end_year = int(round(start_year + T_years))  # exclusive endpoint
+    fit_last_year = fit_end_year - 1
+
+    t_min_year = int(time_params.get("t_min_year", start_year))
+    t_max_year = int(time_params.get("t_max_year", fit_last_year))
+
+    plot_start_year = min(start_year, t_min_year)
+    plot_end_year = max(fit_last_year, t_max_year)
+
+    return plot_start_year, plot_end_year, fit_end_year
+
+
 def _plot_data_vs_mu_year_nodes_lonlat(
     msh_path: Path,
     epsg_project: int,
@@ -1347,7 +1375,7 @@ def _plot_uvIJ_and_w_year_lonlat(msh_path: Path, epsg_project: int, out_png_uvij
 
 
 def _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol: GSBSolution, funcs: GSBFunctions, params: Dict[str, float], events_df: pd.DataFrame, epsg_project: int,
-    out_png: Path, start_month: str, end_month: str, chunk_size: int = 2000, lambda_floor: float = 1e-30, n_stochastic: int = 5, stochastic_seed: int = 0):
+    out_png: Path, start_month: str, end_month: str, chunk_size: int = 2000, lambda_floor: float = 1e-30, n_stochastic: int = 5, stochastic_seed: int = 0, fit_end_month: Optional[str] = None):
     # --- data + mean prediction ---
     y_month, month_labels, K_total, K_inside = bin_events_month_total_inside_mesh(
         mesh=sol.mesh, events_df=events_df, epsg_project=epsg_project,
@@ -1367,6 +1395,8 @@ def _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol: GSBSolution, funcs: GSBF
     ax.plot(x, y_month.astype(float), label="Data (inside mesh)")
     ax.plot(x, bass_month.astype(float), label=f"Bass fit (p={p_hat:.3g}, q={q_hat:.3g})")
     ax.plot(x, mu_month.astype(float), label="GSB mean (integrated λ)")
+    if fit_end_month is not None:
+        ax.axvline(pd.Timestamp(f"{fit_end_month}-01"), linestyle="--", linewidth=1.5, label="Fit/forecast boundary")
 
     ax.set_title(f"Total monthly counts: Data vs Bass vs GSB ({start_month} to {end_month})")
     ax.set_xlabel("Month")
@@ -1396,6 +1426,8 @@ def _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol: GSBSolution, funcs: GSBF
         fig, ax = plt.subplots(figsize=(13, 6))
         ax.plot(x, y_month.astype(float), label="Data (inside mesh)")
         ax.plot(x, y_sim.astype(float), label=f"GSB sampled (NB, phi={phi:.3g})")
+        if fit_end_month is not None:
+            ax.axvline(pd.Timestamp(f"{fit_end_month}-01"), linestyle="--", linewidth=1.5, label="Fit/forecast boundary")
 
         ax.set_title(f"Total monthly counts (stochastic): Data vs sampled GSB ({start_month} to {end_month})")
         ax.set_xlabel("Month")
@@ -1408,15 +1440,11 @@ def _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol: GSBSolution, funcs: GSBF
         fig.savefig(out_j, dpi=200)
         plt.close(fig)
         
-        data_dir = out_png.parent.parent / "data"
-        data_dir.mkdir(parents=True, exist_ok=True)
-        comparison_csv = data_dir / out_png.with_suffix(".csv").name
-        pd.DataFrame({
-            "month": [pd.Timestamp(m).strftime("%Y-%m") for m in month_labels],
-            "data": np.asarray(y_month, float),
-            "standard_bass": np.asarray(bass_month, float),
-            "GSB": np.asarray(mu_month, float),
-        }).to_csv(comparison_csv, index=False)
+    data_dir = out_png.parent.parent / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    comparison_csv = data_dir / out_png.with_suffix(".csv").name
+    pd.DataFrame({"month": [pd.Timestamp(m).strftime("%Y-%m") for m in month_labels], "data": np.asarray(y_month, float), "standard_bass": np.asarray(bass_month, float),
+        "GSB": np.asarray(mu_month, float)}).to_csv(comparison_csv, index=False)
         
 
 # =============================================================================
@@ -1757,12 +1785,19 @@ class Runner:
             self.log(f"_plot_uvIJ_and_w_year_lonlat complete ({time.perf_counter() - t0:.3f} s)")
 
         # --- monthly totals plot ---
-        start_month = f"{int(t_min_year):04d}-01"
-        end_month   = f"{int(t_max_year):04d}-12"
+        plot_start_year, plot_end_year, fit_end_year = _monthly_plot_window_from_time_params(self.time_params)
+        
+        start_month = f"{plot_start_year:04d}-01"
+        end_month = f"{plot_end_year:04d}-12"
+    
+        fit_end_month = None
+        if plot_start_year < fit_end_year <= plot_end_year:
+            fit_end_month = f"{fit_end_year:04d}-01"
+            
         monthly_png = self.fig_dir / f"{st.lower()}_monthly_totals_bass_vs_gsb_vs_data.png"
         t0 = time.perf_counter()
-        _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol=sol, funcs=funcs, params=params, events_df=events_df, epsg_project=fem_cfg.epsg_project, out_png=monthly_png,
-            start_month=start_month, end_month=end_month, chunk_size=int(self.time_params.get("bin_chunk_size", 5000)), lambda_floor=float(self.time_params.get("lambda_floor", 1e-30)))
+        _plot_total_counts_monthly_bass_vs_gsb_vs_data(sol=sol, funcs=funcs, params=params, events_df=events_df, epsg_project=fem_cfg.epsg_project, out_png=monthly_png, start_month=start_month, 
+            end_month=end_month, chunk_size=int(self.time_params.get("bin_chunk_size", 5000)), lambda_floor=float(self.time_params.get("lambda_floor", 1e-30)), fit_end_month=fit_end_month)
         self.log(f"_plot_total_counts_monthly_bass_vs_gsb_vs_data complete ({time.perf_counter() - t0:.3f} s)")
 
         self.log("self.run_FEM complete")

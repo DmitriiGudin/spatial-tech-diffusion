@@ -245,8 +245,27 @@ def predict_ml_counts_recursive(
 
 
 # =============================================================================
-# Plotting helper
+# Plotting helpera
 # =============================================================================
+
+def _monthly_plot_window_ml(runner) -> tuple[int, int, int]:
+    """
+    Monthly diagnostic plot window for ML.
+
+    Training interval is train_start_year..train_end_year inclusive.
+    Forecast/test interval is test_start_year..test_end_year inclusive.
+    Boundary is Jan 1 of train_end_year + 1.
+    """
+    train_start = int(runner.train_start_year)
+    train_end = int(runner.train_end_year)
+    test_start = int(runner.test_start_year)
+    test_end = int(runner.test_end_year)
+
+    plot_start_year = min(train_start, test_start)
+    plot_end_year = max(train_end, test_end)
+    fit_end_year = train_end + 1
+
+    return plot_start_year, plot_end_year, fit_end_year
 
 def _plot_ml_monthly_totals_bass_vs_ml_vs_data(
     *,
@@ -260,6 +279,7 @@ def _plot_ml_monthly_totals_bass_vs_ml_vs_data(
     start_month: str,
     end_month: str,
     chunk_size: int = 5000,
+    fit_end_month: Optional[str] = None
 ):
     import matplotlib.pyplot as plt
 
@@ -300,6 +320,13 @@ def _plot_ml_monthly_totals_bass_vs_ml_vs_data(
     ax.plot(x, y_month.astype(float), label="Data inside mesh")
     ax.plot(x, bass_month.astype(float), label=f"Bass fit (p={p_hat:.3g}, q={q_hat:.3g})")
     ax.plot(x, mu_month.astype(float), label="XGBoost mean")
+    if fit_end_month is not None:
+        ax.axvline(
+            pd.Timestamp(f"{fit_end_month}-01"),
+            linestyle="--",
+            linewidth=1.5,
+            label="Fit/forecast boundary",
+        )
 
     ax.set_title(f"Monthly totals: Data vs Bass vs XGBoost ({start_month} to {end_month})")
     ax.set_xlabel("Month")
@@ -539,8 +566,14 @@ class MLBenchmarkRunner:
             history_mode=str(self.ml_history_mode),
         )
         
-        start_month = f"{int(self.test_start_year):04d}-01"
-        end_month = f"{int(self.test_end_year):04d}-12"
+        plot_start_year, plot_end_year, fit_end_year = _monthly_plot_window_ml(self)
+
+        start_month = f"{plot_start_year:04d}-01"
+        end_month = f"{plot_end_year:04d}-12"
+        
+        fit_end_month = None
+        if plot_start_year < fit_end_year <= plot_end_year:
+            fit_end_month = f"{fit_end_year:04d}-01"
         
         monthly_png = self.fig_dir / f"{st.lower()}_ml_monthly_totals_bass_vs_ml_vs_data.png"
         
@@ -555,6 +588,7 @@ class MLBenchmarkRunner:
             start_month=start_month,
             end_month=end_month,
             chunk_size=int(self.time_params.get("bin_chunk_size", 5000)),
+            fit_end_month=fit_end_month
         )
         
         self.log("_plot_ml_monthly_totals_bass_vs_ml_vs_data complete")

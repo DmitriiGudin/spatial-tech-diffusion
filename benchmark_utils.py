@@ -89,11 +89,29 @@ def aggregate_snapshot_node_to_year_node(values_tn: np.ndarray, times: np.ndarra
 # Plotting helpers
 # =============================================================================
 
-def _aggregate_snapshot_mass_to_months(
-    mass_t: np.ndarray,
-    times: np.ndarray,
-    month_edges_years: np.ndarray,
-) -> np.ndarray:
+def _monthly_plot_window_from_time_params(time_params: Dict[str, Any]) -> tuple[int, int, int]:
+    """
+    Monthly diagnostic plot window.
+
+    Training/fitting interval is [start_year, start_year + T_years).
+    The vertical forecast boundary is Jan 1 of fit_end_year.
+    """
+    start_year = int(float(time_params["start_year"]))
+    T_years = float(time_params["T_years"])
+
+    fit_end_year = int(round(start_year + T_years))
+    fit_last_year = fit_end_year - 1
+
+    t_min_year = int(time_params.get("t_min_year", start_year))
+    t_max_year = int(time_params.get("t_max_year", fit_last_year))
+
+    plot_start_year = min(start_year, t_min_year)
+    plot_end_year = max(fit_last_year, t_max_year)
+
+    return plot_start_year, plot_end_year, fit_end_year
+
+
+def _aggregate_snapshot_mass_to_months(mass_t: np.ndarray, times: np.ndarray, month_edges_years: np.ndarray) -> np.ndarray:
     """
     Aggregate snapshot-assigned mass to true calendar month intervals.
 
@@ -140,55 +158,21 @@ def _aggregate_snapshot_mass_to_months(
     return out
 
 
-def _plot_benchmark_monthly_totals(
-    out_png: Path,
-    *,
-    mesh,
-    events_df: pd.DataFrame,
-    epsg_project: int,
-    times: np.ndarray,
-    YEAR0: float,
-    mu_snap_node: np.ndarray,
-    start_month: str,
-    end_month: str,
-    chunk_size: int = 5000,
-    title: str = "Benchmark monthly totals: Data vs prediction",
-    model_label: str = "Benchmark mean",
-    model_name: str = "Benchmark",
-):
+def _plot_benchmark_monthly_totals(out_png: Path, *, mesh, events_df: pd.DataFrame, epsg_project: int, times: np.ndarray, YEAR0: float, mu_snap_node: np.ndarray, start_month: str, end_month: str, 
+    chunk_size: int = 5000, title: str = "Benchmark monthly totals: Data vs prediction", model_label: str = "Benchmark mean", model_name: str = "Benchmark", fit_end_month: Optional[str] = None):
     import matplotlib.pyplot as plt
 
     # Data: direct calendar-month binning from raw event dates, same philosophy as FEM.
-    y_month, month_labels, K_total, K_inside = bin_events_month_total_inside_mesh(
-        mesh=mesh,
-        events_df=events_df,
-        epsg_project=int(epsg_project),
-        start_month=start_month,
-        end_month=end_month,
-        chunk_size=int(chunk_size),
-    )
+    y_month, month_labels, K_total, K_inside = bin_events_month_total_inside_mesh(mesh=mesh, events_df=events_df, epsg_project=int(epsg_project), start_month=start_month,
+        end_month=end_month, chunk_size=int(chunk_size))
 
     # Model: aggregate snapshot expected mass to true calendar months.
-    month_edges_years = make_month_edges_years(
-        YEAR0=float(YEAR0),
-        start_month=start_month,
-        end_month=end_month,
-    )
+    month_edges_years = make_month_edges_years(YEAR0=float(YEAR0), start_month=start_month, end_month=end_month)
 
     mu_total_snap = np.sum(np.asarray(mu_snap_node, float), axis=1)
-    mu_month = _aggregate_snapshot_mass_to_months(
-        mass_t=mu_total_snap,
-        times=np.asarray(times, float),
-        month_edges_years=month_edges_years,
-    )
+    mu_month = _aggregate_snapshot_mass_to_months(mass_t=mu_total_snap, times=np.asarray(times, float), month_edges_years=month_edges_years)
     
-    p_hat, q_hat, M_hat, bass_month = fit_bass_to_monthly_counts(
-        y_month=y_month,
-        month_edges_years_rel=month_edges_years,
-        p0=0.01,
-        q0=0.1,
-        M0=None,
-    )
+    p_hat, q_hat, M_hat, bass_month = fit_bass_to_monthly_counts(y_month=y_month, month_edges_years_rel=month_edges_years, p0=0.01, q0=0.1, M0=None)
 
     x = np.array(month_labels)
 
@@ -210,6 +194,13 @@ def _plot_benchmark_monthly_totals(
     ax.plot(x, y_month.astype(float), label="Data inside mesh")
     ax.plot(x, bass_month.astype(float), label=f"Bass fit (p={p_hat:.3g}, q={q_hat:.3g})")
     ax.plot(x, mu_month.astype(float), label=model_label)
+    if fit_end_month is not None:
+        ax.axvline(
+            pd.Timestamp(f"{fit_end_month}-01"),
+            linestyle="--",
+            linewidth=1.5,
+            label="Fit/forecast boundary",
+        )
     ax.set_title(title)
     ax.set_xlabel("Month")
     ax.set_ylabel("Count per month")
@@ -429,14 +420,29 @@ class SmithSongDiagnosticRunner:
         self.log(f"smith_song_expected_counts complete ({time.perf_counter() - t0:.3f} s)")
         self.log(f"[mu] total expected snapshot={float(mu_snap_node.sum()):.6g}")
       
-        start_month = f"{int(t_min_year):04d}-01"
-        end_month = f"{int(t_max_year):04d}-12"
+        plot_start_year, plot_end_year, fit_end_year = _monthly_plot_window_from_time_params(self.time_params)
+        
+        events_plot = load_events_csv(
+            self.events_csv,
+            region_states=state_list,
+            YEAR0=fem_cfg.YEAR0,
+            epsg_project=fem_cfg.epsg_project,
+            min_year=float(plot_start_year),
+            max_year=float(plot_end_year + 1),
+        )
+
+        start_month = f"{plot_start_year:04d}-01"
+        end_month = f"{plot_end_year:04d}-12"
+        
+        fit_end_month = None
+        if plot_start_year < fit_end_year <= plot_end_year:
+            fit_end_month = f"{fit_end_year:04d}-01"
         
         monthly_png = self.fig_dir / f"{st.lower()}_smith_song_monthly_totals_vs_data.png"
         _plot_benchmark_monthly_totals(
             out_png=monthly_png,
             mesh=stage_pre.fem_cache.mesh,
-            events_df=events.raw,
+            events_df=events_plot.raw,
             epsg_project=fem_cfg.epsg_project,
             times=stage_pre.fem_cache.times,
             YEAR0=fem_cfg.YEAR0,
@@ -447,6 +453,7 @@ class SmithSongDiagnosticRunner:
             title="Smith & Song monthly totals: Data vs prediction",
             model_label="Smith & Song mean",
             model_name="Smith & Song",
+            fit_end_month=fit_end_month
         )
         self.log("_plot_benchmark_monthly_totals complete")
       
@@ -689,14 +696,29 @@ class DiscreteBassDiagnosticRunner(SmithSongDiagnosticRunner):
         # ---------------------------------------------------------------------
         # Monthly aggregate plot
         # ---------------------------------------------------------------------
-        start_month = f"{int(t_min_year):04d}-01"
-        end_month = f"{int(t_max_year):04d}-12"
+        plot_start_year, plot_end_year, fit_end_year = _monthly_plot_window_from_time_params(self.time_params)
+        
+        events_plot = load_events_csv(
+            self.events_csv,
+            region_states=state_list,
+            YEAR0=fem_cfg.YEAR0,
+            epsg_project=fem_cfg.epsg_project,
+            min_year=float(plot_start_year),
+            max_year=float(plot_end_year + 1),
+        )
+
+        start_month = f"{plot_start_year:04d}-01"
+        end_month = f"{plot_end_year:04d}-12"
+        
+        fit_end_month = None
+        if plot_start_year < fit_end_year <= plot_end_year:
+            fit_end_month = f"{fit_end_year:04d}-01"
 
         monthly_png = self.fig_dir / f"{st.lower()}_discrete_bass_monthly_totals_vs_data.png"
         _plot_benchmark_monthly_totals(
             out_png=monthly_png,
             mesh=stage_pre.fem_cache.mesh,
-            events_df=events.raw,
+            events_df=events_plot.raw,
             epsg_project=fem_cfg.epsg_project,
             times=stage_pre.fem_cache.times,
             YEAR0=fem_cfg.YEAR0,
@@ -707,6 +729,7 @@ class DiscreteBassDiagnosticRunner(SmithSongDiagnosticRunner):
             title="Discrete Bass monthly totals: Data vs prediction",
             model_label="Discrete Bass mean",
             model_name="Discrete Bass",
+            fit_end_month=fit_end_month
         )
         self.log("_plot_benchmark_monthly_totals complete")
 

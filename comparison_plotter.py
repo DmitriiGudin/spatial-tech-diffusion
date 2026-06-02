@@ -7,7 +7,6 @@ import argparse
 from pathlib import Path
 from typing import List, Dict
 
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -41,7 +40,7 @@ def _read_model_csv(path: Path) -> tuple[str, pd.DataFrame]:
     return model_name, df
 
 
-def plot_totals(paths: List[Path], out_png: Path | None = None) -> Path:
+def plot_totals(paths: List[Path], out_png: Path | None = None, year_forecast_starts: int | None = None) -> Path:
     if not paths:
         raise ValueError("At least one CSV path is required.")
     if len(paths) > 4:
@@ -62,12 +61,7 @@ def plot_totals(paths: List[Path], out_png: Path | None = None) -> Path:
     merged = base.copy()
 
     for model_name, df in model_frames.items():
-        merged = merged.merge(
-            df[["month", model_name]],
-            on="month",
-            how="outer",
-            validate="one_to_one",
-        )
+        merged = merged.merge(df[["month", model_name]], on="month", how="outer", validate="one_to_one")
 
     merged = merged.sort_values("month").reset_index(drop=True)
 
@@ -86,6 +80,14 @@ def plot_totals(paths: List[Path], out_png: Path | None = None) -> Path:
     
     for model_name in model_frames:
         ax.plot(x, merged[model_name], label=model_name)
+        
+    if year_forecast_starts is not None:
+        forecast_start = pd.Timestamp(year=int(year_forecast_starts), month=1, day=1)
+        xmin = pd.Timestamp(merged["month"].min())
+        xmax = pd.Timestamp(merged["month"].max())
+    
+        if xmin <= forecast_start <= xmax:
+            ax.axvline(forecast_start, linestyle="--", linewidth=1.5, label=f"Forecast starts ({int(year_forecast_starts)})")
     
     ax.set_title("Monthly adoptions: data, Bass, and model comparisons")
     ax.set_xlabel("Month")
@@ -117,13 +119,11 @@ def main() -> int:
     ap.add_argument("--func", required=True, choices=["plot_totals"])
     ap.add_argument("--paths", nargs="+", required=True)
     ap.add_argument("--out", default="")
+    ap.add_argument("--year_forecast_starts", type=int, default=None, help="Optional year at which forecast period starts; draws a vertical dashed line at Jan 1 of that year.")
     args = ap.parse_args()
 
     if args.func == "plot_totals":
-        plot_totals(
-            paths=[Path(p) for p in args.paths],
-            out_png=Path(args.out) if args.out else None,
-        )
+        plot_totals(paths=[Path(p) for p in args.paths], out_png=Path(args.out) if args.out else None, year_forecast_starts=args.year_forecast_starts)
         return 0
 
     raise ValueError(f"Unknown function: {args.func}")

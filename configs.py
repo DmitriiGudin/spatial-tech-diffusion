@@ -58,7 +58,7 @@ default = dict(
         gamma=0.101,#gamma=0,
         grad_clip=20,#grad_clip=200,
         step_clip=2,#step_clip=100,
-        n_grad_avg=3, # NEW
+        n_grad_avg=3
     ),
     randomSearch_params=dict(
         N_0=1000,#N_0=4000,
@@ -339,6 +339,28 @@ SanDiego_time_params_forecast=dict(
 
 SanDiego_cities={"San Diego": [-117.1611, 32.7157]}
 
+# ---
+
+Denver_mesh_params=dict(
+    state_list=['CO'],
+    county_list=['Denver', 'Adams', 'Arapahoe', 'Broomfield', 'Clear Creek', 'Douglas', 'Jefferson'],
+    h_km=4,
+    simplify_km=12)
+
+Denver_time_params_sample=dict(
+    start_year=2007,
+    T_years=17,
+    t_min_year=2007,
+    t_max_year=2023)
+
+Denver_time_params_forecast=dict(
+    start_year=2007,
+    T_years=15,
+    t_min_year=2022,
+    t_max_year=2023)
+
+Denver_cities={"Denver": [-104.9915, 39.7420]}
+
 
 
 
@@ -419,3 +441,8 @@ Custom configurations start here
  SanDiego_SmithSong_sample, SanDiego_SmithSong_forecast, 
  SanDiego_DiscreteBass_sample, SanDiego_DiscreteBass_forecast, 
  SanDiego_ml_sample, SanDiego_ml_forecast) = build_8_models(SanDiego_mesh_params, SanDiego_time_params_sample, SanDiego_time_params_forecast, SanDiego_cities)
+
+(Denver_GSB_sample, Denver_GSB_forecast, 
+ Denver_SmithSong_sample, Denver_SmithSong_forecast, 
+ Denver_DiscreteBass_sample, Denver_DiscreteBass_forecast, 
+ Denver_ml_sample, Denver_ml_forecast) = build_8_models(Denver_mesh_params, Denver_time_params_sample, Denver_time_params_forecast, Denver_cities)

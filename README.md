@@ -19,7 +19,7 @@ python raw_to_processed_solar_all.py
 
 We will use Florida here as an example.
 
-*  *(Optional)* Before modeling the market, we need to choose the state to explore and approximate its geometry with a mesh. You can play around with mesh parameters *h_km* (mesh size) and *simplify_km* (boundary simplification size) and explore figures and diagnostics:
+*  *(Optional)* Before modeling the market, we need to choose the territory to explore and approximate its geometry with a mesh. You can play around with mesh parameters *h_km* (mesh size) and *simplify_km* (boundary simplification size) and explore figures and diagnostics:
 ```
 python run_mesh_diag.py --h_km 8 --simplify_km 24 --states FL
 ```
